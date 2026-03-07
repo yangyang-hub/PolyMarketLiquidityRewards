@@ -48,8 +48,6 @@ export interface StrategyConfig {
   cancelDepthLevel: number;
   minOrderSize: number;
   maxPositionPerMarket: number;
-  minDailyRate: number;
-  maxMarkets: number;
   quoteYes: boolean;
   quoteNo: boolean;
 }

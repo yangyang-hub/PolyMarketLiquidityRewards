@@ -270,14 +270,6 @@ export function dbUpdateMarketRewards(
 
 // --- Account Overrides ---
 
-export function dbGetAccountOverride(accountName: string): StrategyOverride {
-  const row = getDb()
-    .prepare("SELECT overrides_json FROM account_overrides WHERE account_name = ?")
-    .get(accountName) as { overrides_json: string } | undefined;
-  if (!row) return {};
-  return JSON.parse(row.overrides_json);
-}
-
 export function dbSetAccountOverride(accountName: string, override: StrategyOverride): void {
   getDb()
     .prepare(
@@ -299,14 +291,6 @@ export function dbGetAllAccountOverrides(): Record<string, StrategyOverride> {
 }
 
 // --- Market Overrides ---
-
-export function dbGetMarketOverride(conditionId: string): StrategyOverride {
-  const row = getDb()
-    .prepare("SELECT overrides_json FROM market_overrides WHERE condition_id = ?")
-    .get(conditionId) as { overrides_json: string } | undefined;
-  if (!row) return {};
-  return JSON.parse(row.overrides_json);
-}
 
 export function dbSetMarketOverride(conditionId: string, override: StrategyOverride): void {
   getDb()

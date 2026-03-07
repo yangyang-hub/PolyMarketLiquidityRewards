@@ -14,16 +14,6 @@ export interface OrderBook {
   timestamp: number;
 }
 
-export function midpoint(book: OrderBook): Decimal | null {
-  if (book.bids.length === 0 || book.asks.length === 0) return null;
-  return book.bids[0].price.plus(book.asks[0].price).dividedBy(2);
-}
-
-export function spread(book: OrderBook): Decimal | null {
-  if (book.bids.length === 0 || book.asks.length === 0) return null;
-  return book.asks[0].price.minus(book.bids[0].price);
-}
-
 // --- Strategy Config ---
 
 export interface StrategyConfig {
@@ -31,8 +21,6 @@ export interface StrategyConfig {
   cancelDepthLevel: number;
   minOrderSize: number;
   maxPositionPerMarket: number;
-  minDailyRate: number;
-  maxMarkets: number;
   quoteYes: boolean;
   quoteNo: boolean;
 }
@@ -124,13 +112,6 @@ export interface MarketInfo {
     min_size: number;
   };
   liquidity: number;
-}
-
-export interface ClobRewardData {
-  conditionId: string;
-  rewardsMaxSpread: Decimal;
-  rewardsMinSize: Decimal;
-  totalDailyRate: Decimal;
 }
 
 export interface TokenQuote {
