@@ -43,7 +43,6 @@ export class AccountEngine {
 
     try {
       await this.executor.initApiKeys();
-      await this.executor.ensureAllowance();
       const balance = await this.executor.getCollateralBalance();
       store.updateAccount(this.account.name, { status: "running", balance });
       this.broadcastState();
