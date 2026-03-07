@@ -140,11 +140,19 @@ export class ClobWsFeed {
     });
   }
 
+  /** Count of orderbook updates emitted to callback (for diagnostics) */
+  public updateCount = 0;
+
   private handleMessage(msg: any): void {
     const events = Array.isArray(msg) ? msg : [msg];
 
     for (const event of events) {
       const eventType = event.event_type;
+
+      // Log event types for the first 20 messages to aid debugging
+      if (this.msgCount <= 20) {
+        console.log(`[WsFeed] Event #${this.msgCount} type=${eventType || "unknown"}`);
+      }
 
       if (eventType === "book") {
         this.handleBookEvent(event);
@@ -189,6 +197,7 @@ export class ClobWsFeed {
     }
 
     this.onUpdate(tokenId, book);
+    this.updateCount++;
   }
 
   /**
@@ -237,6 +246,7 @@ export class ClobWsFeed {
       const local = this.localBooks.get(tokenId)!;
       const book = this.buildOrderBook(tokenId, local, timestamp);
       this.onUpdate(tokenId, book);
+      this.updateCount++;
     }
   }
 

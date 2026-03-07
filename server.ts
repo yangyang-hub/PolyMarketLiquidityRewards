@@ -24,6 +24,14 @@ app.prepare().then(async () => {
     if (pathname === "/ws") {
       wss.handleUpgrade(req, socket, head, (ws) => {
         engineManager.addClient(ws);
+
+        // Handle browser keepalive PING (text-level, not protocol-level)
+        ws.on("message", (data) => {
+          if (data.toString() === "PING") {
+            ws.send("PONG");
+          }
+        });
+
         ws.on("close", () => engineManager.removeClient(ws));
       });
     } else {

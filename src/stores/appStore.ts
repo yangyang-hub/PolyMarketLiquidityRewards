@@ -19,6 +19,7 @@ interface AppState {
   marketOverrides: Record<string, StrategyOverride>;
   selectedMarketTokenId: string | null;
   orderbooks: Record<string, OrderBookDto>;
+  orderbookSeq: number; // increments on each orderbook_update for live indicator
   config: StrategyConfig | null;
   eventLog: OrderEvent[];
   systemStatus: {
@@ -47,6 +48,7 @@ export const useAppStore = create<AppState>((set) => ({
   marketOverrides: {},
   selectedMarketTokenId: null,
   orderbooks: {},
+  orderbookSeq: 0,
   config: null,
   eventLog: [],
   systemStatus: {
@@ -69,6 +71,7 @@ export const useAppStore = create<AppState>((set) => ({
                 timestamp: msg.timestamp,
               },
             },
+            orderbookSeq: state.orderbookSeq + 1,
           };
 
         case "account_state":

@@ -17,6 +17,8 @@ import {
   dbDeleteAccount,
   dbGetAccountConfig,
   dbUpdateMarketRewards,
+  dbSetAccountEnabled,
+  dbGetEnabledAccountNames,
 } from "../db/database";
 import { ClobWsFeed } from "../clob/ws-feed";
 import { ClobExecutor } from "../clob/executor";
@@ -113,9 +115,34 @@ class EngineManager {
       30 * 60 * 1000,
     );
 
+    // Periodic diagnostics log (every 60 seconds)
+    setInterval(() => {
+      console.log(
+        `[Manager] Status: CLOB WS ${this.wsFeed.connected ? "connected" : "disconnected"}, ` +
+        `updates=${this.wsFeed.updateCount}, ` +
+        `browsers=${this.wsClients.size}, ` +
+        `tokens=${[...new Set(store.managedMarkets.flatMap(m => m.tokens.map(t => t.token_id)))].length}`,
+      );
+    }, 60_000);
+
     this.initialized = true;
     console.log(`[Manager] Initialized with ${this.accountConfigs.length} accounts, ${store.managedMarkets.length} markets`);
     this.broadcastSystemStatus();
+
+    // Auto-start accounts that were enabled before restart
+    const enabledNames = dbGetEnabledAccountNames();
+    if (enabledNames.length > 0) {
+      console.log(`[Manager] Auto-starting ${enabledNames.length} previously enabled accounts: ${enabledNames.join(", ")}`);
+      for (const name of enabledNames) {
+        try {
+          await this.startAccount(name);
+          console.log(`[Manager] Auto-started: ${name}`);
+        } catch (e: any) {
+          console.error(`[Manager] Failed to auto-start ${name}:`, e.message);
+          dbSetAccountEnabled(name, false);
+        }
+      }
+    }
   }
 
   // --- Account Management ---
@@ -396,6 +423,7 @@ class EngineManager {
     const engine = this.engines.get(name);
     if (!engine) return false;
     await engine.start();
+    dbSetAccountEnabled(name, true);
     this.broadcastSystemStatus();
     return true;
   }
@@ -404,6 +432,7 @@ class EngineManager {
     const engine = this.engines.get(name);
     if (!engine) return false;
     await engine.stop();
+    dbSetAccountEnabled(name, false);
     this.broadcastSystemStatus();
     return true;
   }

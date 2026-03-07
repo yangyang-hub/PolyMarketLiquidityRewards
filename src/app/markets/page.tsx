@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useAppStore } from "@/stores/appStore";
 import { useApi } from "@/hooks/useApi";
 import OverrideEditor from "@/components/OverrideEditor";
@@ -14,6 +14,7 @@ export default function MarketsPage() {
   const selectedTokenId = useAppStore((s) => s.selectedMarketTokenId);
   const setSelectedMarketToken = useAppStore((s) => s.setSelectedMarketToken);
   const orderbooks = useAppStore((s) => s.orderbooks);
+  const orderbookSeq = useAppStore((s) => s.orderbookSeq);
   const setOrderbooks = useAppStore((s) => s.setOrderbooks);
   const accounts = useAppStore((s) => s.accounts);
   const { post, put, del } = useApi();
@@ -50,6 +51,18 @@ export default function MarketsPage() {
       .catch((e) => console.error("Orderbook REST fallback failed:", e));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [managedMarkets.length]);
+
+  // Pulse animation when new orderbook data arrives
+  const [pulse, setPulse] = useState(false);
+  const prevSeq = useRef(orderbookSeq);
+  useEffect(() => {
+    if (orderbookSeq !== prevSeq.current) {
+      prevSeq.current = orderbookSeq;
+      setPulse(true);
+      const t = setTimeout(() => setPulse(false), 800);
+      return () => clearTimeout(t);
+    }
+  }, [orderbookSeq]);
 
   const selectedBook = selectedTokenId ? orderbooks[selectedTokenId] : null;
 
@@ -181,13 +194,19 @@ export default function MarketsPage() {
         {/* Order Book */}
         <div className="card bg-base-100 shadow-sm border border-base-300 h-fit sticky top-4">
           <div className="card-body p-4">
-            <h3 className="font-semibold text-sm mb-2">
+            <h3 className="font-semibold text-sm mb-2 flex items-center gap-2">
               盘口深度
               {selectedBook && (
-                <span className="ml-2 text-xs opacity-40 font-normal">
+                <span className="text-xs opacity-40 font-normal">
                   {new Date(selectedBook.timestamp).toLocaleTimeString()}
                 </span>
               )}
+              <span
+                className={`inline-block w-1.5 h-1.5 rounded-full transition-colors duration-300 ${
+                  pulse ? "bg-success" : "bg-base-300"
+                }`}
+                title={`WS updates: ${orderbookSeq}`}
+              />
             </h3>
             {selectedTokenLabel && (
               <div className="text-xs opacity-50 -mt-1 mb-1 truncate">

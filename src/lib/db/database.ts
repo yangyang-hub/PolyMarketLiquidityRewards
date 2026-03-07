@@ -29,6 +29,7 @@ function getDb(): Database.Database {
       auth_tag TEXT NOT NULL,
       signature_type INTEGER NOT NULL DEFAULT 0,
       proxy_wallet TEXT,
+      enabled INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -64,6 +65,12 @@ function getDb(): Database.Database {
 
     DROP TABLE IF EXISTS enabled_markets;
   `);
+
+  // Migration: add enabled column if missing (for existing databases)
+  const cols = db.prepare("PRAGMA table_info(accounts)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === "enabled")) {
+    db.exec("ALTER TABLE accounts ADD COLUMN enabled INTEGER NOT NULL DEFAULT 0");
+  }
 
   g.__appDb = db;
   return db;
@@ -148,6 +155,19 @@ export function dbGetAllAccountMetas(): AccountMeta[] {
     signatureType: row.signature_type,
     proxyWallet: row.proxy_wallet ?? undefined,
   }));
+}
+
+export function dbSetAccountEnabled(name: string, enabled: boolean): void {
+  getDb()
+    .prepare("UPDATE accounts SET enabled = ? WHERE name = ?")
+    .run(enabled ? 1 : 0, name);
+}
+
+export function dbGetEnabledAccountNames(): string[] {
+  const rows = getDb()
+    .prepare("SELECT name FROM accounts WHERE enabled = 1 ORDER BY created_at")
+    .all() as { name: string }[];
+  return rows.map((r) => r.name);
 }
 
 // --- Strategy Config ---

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import Sidebar from "@/components/Sidebar";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useAppStore } from "@/stores/appStore";
@@ -23,10 +23,10 @@ export default function ClientLayout({
 
   const { connected } = useWebSocket(handleMessage);
 
-  // Sync ws connection state
-  if (connected !== useAppStore.getState().wsConnected) {
+  // Sync WS connection state via useEffect (not during render)
+  useEffect(() => {
     setWsConnected(connected);
-  }
+  }, [connected, setWsConnected]);
 
   return (
     <div className="flex min-h-screen">
