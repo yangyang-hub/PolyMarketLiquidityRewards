@@ -85,6 +85,16 @@ export class AccountEngine {
     return this.running;
   }
 
+  /** Cancel a single order by ID */
+  async cancelOrderById(orderId: string): Promise<boolean> {
+    return this.executor.cancelOrder(orderId);
+  }
+
+  /** Cancel all open orders for this account */
+  async cancelAllOrders(): Promise<void> {
+    await this.executor.cancelAll();
+  }
+
   /** Called by manager when an orderbook update arrives. Debounces into a tick. */
   onBookUpdate(_tokenId: string): void {
     if (!this.running) return;

@@ -132,7 +132,7 @@ export class ClobExecutor {
         side: "BUY" as any,
         size: size.toNumber(),
         expiration: 0,
-      });
+      }, undefined, undefined, undefined, true);
       return resp?.orderID || resp?.id || null;
     } catch (e: any) {
       console.error(`[${this.accountName}] BUY failed:`, e.message);
@@ -168,7 +168,7 @@ export class ClobExecutor {
         side: "SELL" as any,
         size: size.toNumber(),
         expiration: 0,
-      });
+      }, undefined, undefined, undefined, true);
       return resp?.orderID || resp?.id || null;
     } catch (e: any) {
       console.error(`[${this.accountName}] SELL failed:`, e.message);
@@ -235,10 +235,13 @@ export class ClobExecutor {
       const resp = await this.client.getBalanceAllowance({
         asset_type: "COLLATERAL" as any,
       });
-      const raw = parseFloat(resp?.balance || "0");
-      const balance = raw / 1e6;
-      console.log(`[${this.accountName}] balance raw=${raw}, USDC=${balance}`);
-      return balance;
+      const rawBalance = parseFloat(resp?.balance || "0");
+      const rawAllowance = parseFloat(resp?.allowance || "0");
+      const balance = rawBalance / 1e6;
+      const allowance = rawAllowance / 1e6;
+      const effective = Math.min(balance, allowance);
+      console.log(`[${this.accountName}] balance=$${balance}, allowance=$${allowance}, effective=$${effective}`);
+      return effective;
     } catch (e: any) {
       console.error(`[${this.accountName}] getBalance failed:`, e.message);
       return 0;

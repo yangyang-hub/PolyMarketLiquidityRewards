@@ -150,6 +150,8 @@ function AccountCardItem({
   onDelete,
   onStart,
   onStop,
+  onCancelOrder,
+  onCancelAll,
   onSaveOverride,
 }: {
   name: string;
@@ -162,6 +164,8 @@ function AccountCardItem({
   onDelete: () => void;
   onStart: () => void;
   onStop: () => void;
+  onCancelOrder: (orderId: string) => Promise<void>;
+  onCancelAll: () => Promise<void>;
   onSaveOverride: (o: StrategyOverride) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -301,7 +305,11 @@ function AccountCardItem({
                 </button>
                 {expanded && (
                   <div className="mt-2">
-                    <OrderTable orders={account.activeOrders} />
+                    <OrderTable
+                      orders={account.activeOrders}
+                      onCancelOrder={onCancelOrder}
+                      onCancelAll={onCancelAll}
+                    />
                   </div>
                 )}
               </>
@@ -543,6 +551,8 @@ export default function AccountsPage() {
                 }}
                 onStart={() => post(`/api/accounts/${encodeURIComponent(name)}/start`)}
                 onStop={() => post(`/api/accounts/${encodeURIComponent(name)}/stop`)}
+                onCancelOrder={async (orderId) => { await post(`/api/accounts/${encodeURIComponent(name)}/cancel-order`, { orderId }); }}
+                onCancelAll={async () => { await post(`/api/accounts/${encodeURIComponent(name)}/cancel-all`); }}
                 onSaveOverride={(o) => handleSaveOverride(name, o)}
               />
             );

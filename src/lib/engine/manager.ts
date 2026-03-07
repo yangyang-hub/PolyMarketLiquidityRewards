@@ -449,6 +449,32 @@ class EngineManager {
     }
   }
 
+  async cancelOrder(accountName: string, orderId: string): Promise<boolean> {
+    const engine = this.engines.get(accountName);
+    if (!engine) return false;
+    const ok = await engine.cancelOrderById(orderId);
+    if (ok) {
+      // Update account state: remove cancelled order from active list
+      const state = store.accounts.get(accountName);
+      if (state) {
+        store.updateAccount(accountName, {
+          activeOrders: state.activeOrders.filter((o) => o.orderId !== orderId),
+        });
+        this.broadcast({ type: "account_state", name: accountName, state: store.accounts.get(accountName)! });
+      }
+    }
+    return ok;
+  }
+
+  async cancelAllOrders(accountName: string): Promise<boolean> {
+    const engine = this.engines.get(accountName);
+    if (!engine) return false;
+    await engine.cancelAllOrders();
+    store.updateAccount(accountName, { activeOrders: [] });
+    this.broadcast({ type: "account_state", name: accountName, state: store.accounts.get(accountName)! });
+    return true;
+  }
+
   getAccountStates(): AccountState[] {
     return store.getAccountStates();
   }
