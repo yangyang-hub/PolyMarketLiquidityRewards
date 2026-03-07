@@ -84,6 +84,7 @@ class EngineManager {
       // Fetch balance in background
       const executor = new ClobExecutor(acc);
       executor.initApiKeys().then(async () => {
+        await executor.ensureAllowance();
         const balance = await executor.getCollateralBalance();
         console.log(`[Manager] ${acc.name} balance: $${balance}`);
         store.updateAccount(acc.name, { balance });
@@ -480,6 +481,20 @@ class EngineManager {
     store.updateAccount(accountName, { activeOrders: [] });
     this.broadcast({ type: "account_state", name: accountName, state: store.accounts.get(accountName)! });
     return true;
+  }
+
+  /** Trigger on-chain approvals + CLOB server allowance refresh for an account */
+  async refreshAllowance(accountName: string): Promise<void> {
+    const acc = this.accountConfigs.find((a) => a.name === accountName);
+    if (!acc) throw new Error(`Account "${accountName}" not found`);
+
+    const executor = new ClobExecutor(acc);
+    await executor.initApiKeys();
+    await executor.approveOnChain();
+    await executor.ensureAllowance();
+    const balance = await executor.getCollateralBalance();
+    store.updateAccount(accountName, { balance });
+    this.broadcast({ type: "account_state", name: accountName, state: store.accounts.get(accountName)! });
   }
 
   getAccountStates(): AccountState[] {
