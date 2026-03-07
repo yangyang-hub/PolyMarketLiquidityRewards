@@ -135,6 +135,11 @@ export class AccountEngine {
     // Track which orders were cancelled this tick
     const cancelledOrderIds = new Set<string>();
 
+    // Get account balance for sizing (same balance available for all tokens)
+    const accountState = store.accounts.get(this.account.name);
+    const balance = new Decimal(accountState?.balance || 0);
+    console.log(`[Engine:${this.account.name}] Balance: $${balance}`);
+
     // Process each market
     for (const market of markets) {
       // Resolve layered config: global -> account override -> market override
@@ -194,10 +199,6 @@ export class AccountEngine {
           }
         }
 
-        // Get account balance for sizing
-        const accountState = store.accounts.get(this.account.name);
-        const balance = new Decimal(accountState?.balance || 0);
-
         // Compute quotes at depth level
         const quote = computeDepthQuotes(
           book,
@@ -210,11 +211,11 @@ export class AccountEngine {
         );
 
         if (!quote) {
-          console.log(`[Engine:${this.account.name}] ${token.outcome}: quote=null (depth=${config.orderDepthLevel}, bids=${book.bids.length}, asks=${book.asks.length}, maxSpread=${rewardsMaxSpread}, balance=$${balance})`);
+          console.log(`[Engine:${this.account.name}] ${token.outcome}: quote=null (depth=${config.orderDepthLevel}, bids=${book.bids.length}, asks=${book.asks.length}, maxSpread=${rewardsMaxSpread})`);
           continue;
         }
 
-        console.log(`[Engine:${this.account.name}] ${token.outcome}: quote bid=${quote.bidPrice}×${quote.bidSize} ask=${quote.askPrice}×${quote.askSize} (balance=$${balance})`);
+        console.log(`[Engine:${this.account.name}] ${token.outcome}: quote bid=${quote.bidPrice}×${quote.bidSize} ask=${quote.askPrice}×${quote.askSize}`);
 
         // Check if we already have LIVE (non-cancelled) orders at these prices
         const hasBuyAtPrice = existingOrders.some(
@@ -280,12 +281,12 @@ export class AccountEngine {
       }
     }
 
-    // Update account state (including balance)
-    const balance = await this.executor.getCollateralBalance();
+    // Update account state (including fresh balance)
+    const freshBalance = await this.executor.getCollateralBalance();
     store.updateAccount(this.account.name, {
       activeOrders: trackedOrders,
       marketsCount: markets.length,
-      balance,
+      balance: freshBalance,
     });
     this.broadcastState();
   }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useAppStore } from "@/stores/appStore";
 import { useApi } from "@/hooks/useApi";
 import OverrideEditor from "@/components/OverrideEditor";
@@ -14,7 +14,6 @@ export default function MarketsPage() {
   const selectedTokenId = useAppStore((s) => s.selectedMarketTokenId);
   const setSelectedMarketToken = useAppStore((s) => s.setSelectedMarketToken);
   const orderbooks = useAppStore((s) => s.orderbooks);
-  const orderbookSeq = useAppStore((s) => s.orderbookSeq);
   const setOrderbooks = useAppStore((s) => s.setOrderbooks);
   const accounts = useAppStore((s) => s.accounts);
   const { post, put, del } = useApi();
@@ -52,19 +51,23 @@ export default function MarketsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [managedMarkets.length]);
 
-  // Pulse animation when new orderbook data arrives
-  const [pulse, setPulse] = useState(false);
-  const prevSeq = useRef(orderbookSeq);
-  useEffect(() => {
-    if (orderbookSeq !== prevSeq.current) {
-      prevSeq.current = orderbookSeq;
-      setPulse(true);
-      const t = setTimeout(() => setPulse(false), 800);
-      return () => clearTimeout(t);
-    }
-  }, [orderbookSeq]);
-
+  // Track time since last orderbook update for selected token
+  const systemStatus = useAppStore((s) => s.systemStatus);
   const selectedBook = selectedTokenId ? orderbooks[selectedTokenId] : null;
+  const selectedBookTs = selectedBook?.timestamp ?? null;
+  const [elapsed, setElapsed] = useState<number | null>(null);
+  useEffect(() => {
+    const update = () => {
+      if (selectedBookTs) {
+        setElapsed(Math.floor((Date.now() - selectedBookTs) / 1000));
+      } else {
+        setElapsed(null);
+      }
+    };
+    update();
+    const t = setInterval(update, 1000);
+    return () => clearInterval(t);
+  }, [selectedBookTs]);
 
   // Find the selected token's market and outcome for the OrderBook header
   let selectedTokenLabel = "";
@@ -121,9 +124,9 @@ export default function MarketsPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col h-[calc(100vh-3rem)]">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between shrink-0">
         <div>
           <h2 className="text-2xl font-bold">市场管理</h2>
           <p className="text-sm opacity-60">
@@ -139,7 +142,7 @@ export default function MarketsPage() {
       </div>
 
       {/* Add Market */}
-      <div className="card bg-base-100 shadow-sm border border-base-300">
+      <div className="card bg-base-100 shadow-sm border border-base-300 mt-4 shrink-0">
         <div className="card-body p-4">
           <div className="flex gap-2">
             <input
@@ -164,9 +167,9 @@ export default function MarketsPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-        {/* Market Cards */}
-        <div className="xl:col-span-2 space-y-3">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mt-4 min-h-0 flex-1">
+        {/* Market Cards — scrollable */}
+        <div className="xl:col-span-2 space-y-3 overflow-y-auto pr-1">
           {managedMarkets.length === 0 ? (
             <div className="card bg-base-100 shadow-sm border border-base-300">
               <div className="card-body items-center text-center py-12">
@@ -196,17 +199,21 @@ export default function MarketsPage() {
           <div className="card-body p-4">
             <h3 className="font-semibold text-sm mb-2 flex items-center gap-2">
               盘口深度
-              {selectedBook && (
-                <span className="text-xs opacity-40 font-normal">
-                  {new Date(selectedBook.timestamp).toLocaleTimeString()}
+              <span
+                className={`inline-block w-1.5 h-1.5 rounded-full ${
+                  systemStatus.wsConnected ? "bg-success" : "bg-error"
+                }`}
+                title={systemStatus.wsConnected ? "CLOB WS 已连接" : "CLOB WS 未连接"}
+              />
+              {elapsed !== null && (
+                <span
+                  className={`text-xs font-normal ${
+                    elapsed < 30 ? "text-success" : elapsed < 120 ? "text-warning" : "opacity-40"
+                  }`}
+                >
+                  {elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m${elapsed % 60}s`} ago
                 </span>
               )}
-              <span
-                className={`inline-block w-1.5 h-1.5 rounded-full transition-colors duration-300 ${
-                  pulse ? "bg-success" : "bg-base-300"
-                }`}
-                title={`WS updates: ${orderbookSeq}`}
-              />
             </h3>
             {selectedTokenLabel && (
               <div className="text-xs opacity-50 -mt-1 mb-1 truncate">
