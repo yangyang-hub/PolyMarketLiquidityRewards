@@ -177,7 +177,7 @@ export default function MarketsPage() {
               </div>
             </div>
           ) : (
-            managedMarkets.map((m) => (
+            [...managedMarkets].sort((a, b) => b.addedAt - a.addedAt).map((m) => (
               <MarketCard
                 key={m.conditionId}
                 market={m}

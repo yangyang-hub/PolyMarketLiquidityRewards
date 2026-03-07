@@ -323,6 +323,13 @@ class EngineManager {
     this.wsFeed.subscribe(tokenIds);
     await this.fetchOrderbooks(tokenIds);
 
+    // Trigger a tick on all running engines so they pick up the new market
+    for (const engine of this.engines.values()) {
+      if (engine.isRunning()) {
+        engine.onBookUpdate(tokenIds[0]);
+      }
+    }
+
     this.broadcast({ type: "market_added", market: managed });
     this.broadcastSystemStatus();
 

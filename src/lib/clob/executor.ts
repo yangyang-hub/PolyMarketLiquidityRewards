@@ -239,9 +239,11 @@ export class ClobExecutor {
       const rawAllowance = parseFloat(resp?.allowance || "0");
       const balance = rawBalance / 1e6;
       const allowance = rawAllowance / 1e6;
-      const effective = Math.min(balance, allowance);
-      console.log(`[${this.accountName}] balance=$${balance}, allowance=$${allowance}, effective=$${effective}`);
-      return effective;
+      if (allowance < balance) {
+        console.warn(`[${this.accountName}] allowance=$${allowance} < balance=$${balance}, using balance for sizing`);
+      }
+      console.log(`[${this.accountName}] balance=$${balance}`);
+      return balance;
     } catch (e: any) {
       console.error(`[${this.accountName}] getBalance failed:`, e.message);
       return 0;
