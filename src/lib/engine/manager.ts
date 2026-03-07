@@ -24,6 +24,7 @@ import { fetchMarketByConditionId, fetchMarketBySlug } from "../gamma/api";
 import { store } from "../store/memory-store";
 import { AccountEngine } from "./engine";
 import { ethers } from "ethers";
+import { getClobHost } from "../config";
 
 const ACCOUNT_NAME_RE = /^[a-zA-Z0-9_\-]{1,64}$/;
 
@@ -33,7 +34,6 @@ class EngineManager {
   private wsFeed: ClobWsFeed;
   private wsClients: Set<WebSocket> = new Set();
   private rewardRefreshTimer: ReturnType<typeof setInterval> | null = null;
-  private balanceRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private initialized = false;
 
   constructor() {
@@ -46,6 +46,12 @@ class EngineManager {
         asks: book.asks.map((a) => ({ price: a.price.toNumber(), size: a.size.toNumber() })),
         timestamp: book.timestamp,
       });
+      // Notify all running engines of the book update
+      for (const engine of this.engines.values()) {
+        if (engine.isRunning()) {
+          engine.onBookUpdate(tokenId);
+        }
+      }
     });
   }
 
@@ -105,12 +111,6 @@ class EngineManager {
     this.rewardRefreshTimer = setInterval(
       () => this.refreshMarketRewards(),
       30 * 60 * 1000,
-    );
-
-    // Periodic balance refresh for all accounts (every 60 seconds)
-    this.balanceRefreshTimer = setInterval(
-      () => this.refreshAllBalances(),
-      60 * 1000,
     );
 
     this.initialized = true;
@@ -236,14 +236,23 @@ class EngineManager {
     }
     if (!marketInfo) throw new Error(`Market not found: ${input}`);
 
+    if (!marketInfo.tokens || marketInfo.tokens.length === 0) {
+      throw new Error(`Market has no tokens (clobTokenIds): ${input}`);
+    }
+
+    console.log(`[Manager] Market found: ${marketInfo.question}, ${marketInfo.tokens.length} tokens`);
+    for (const t of marketInfo.tokens) {
+      console.log(`[Manager]   token: ${t.outcome} → ${t.token_id.slice(0, 20)}...`);
+    }
+
     // Check if already managed
     if (store.managedMarkets.some((m) => m.conditionId === marketInfo!.condition_id)) {
       throw new Error(`Market already managed: ${marketInfo.condition_id}`);
     }
 
     // Fetch CLOB rewards for this market
-    let rewardsMaxSpread = 0;
-    let rewardsMinSize = 0;
+    let rewardsMaxSpread = marketInfo.rewards?.max_spread || 0;
+    let rewardsMinSize = marketInfo.rewards?.min_size || 0;
     let dailyRate = 0;
 
     const firstAcc = this.accountConfigs[0];
@@ -346,6 +355,7 @@ class EngineManager {
         rewardsMap.set(r.condition_id, r);
       }
 
+      let changed = false;
       for (const market of store.managedMarkets) {
         const match = rewardsMap.get(market.conditionId);
         if (match) {
@@ -355,36 +365,28 @@ class EngineManager {
             (sum: number, c: any) => sum + (c.rate_per_day || 0),
             0,
           );
-          dbUpdateMarketRewards(market.conditionId, maxSpread, minSize, rate, market.liquidity);
-          market.rewardsMaxSpread = maxSpread;
-          market.rewardsMinSize = minSize;
-          market.dailyRate = rate;
+          if (
+            market.rewardsMaxSpread !== maxSpread ||
+            market.rewardsMinSize !== minSize ||
+            market.dailyRate !== rate
+          ) {
+            dbUpdateMarketRewards(market.conditionId, maxSpread, minSize, rate, market.liquidity);
+            market.rewardsMaxSpread = maxSpread;
+            market.rewardsMinSize = minSize;
+            market.dailyRate = rate;
+            changed = true;
+          }
         }
       }
 
-      this.broadcast({ type: "managed_markets", markets: store.managedMarkets });
-      console.log("[Manager] Market rewards refreshed");
+      if (changed) {
+        this.broadcast({ type: "managed_markets", markets: store.managedMarkets });
+        console.log("[Manager] Market rewards refreshed (data changed)");
+      } else {
+        console.log("[Manager] Market rewards refreshed (no changes)");
+      }
     } catch (e: any) {
       console.error("[Manager] Reward refresh failed:", e.message);
-    }
-  }
-
-  // --- Balance Refresh ---
-
-  private async refreshAllBalances(): Promise<void> {
-    for (const acc of this.accountConfigs) {
-      try {
-        const executor = new ClobExecutor(acc);
-        await executor.initApiKeys();
-        const balance = await executor.getCollateralBalance();
-        const prev = store.accounts.get(acc.name);
-        if (prev && prev.balance !== balance) {
-          store.updateAccount(acc.name, { balance });
-          this.broadcast({ type: "account_state", name: acc.name, state: store.accounts.get(acc.name)! });
-        }
-      } catch {
-        // skip this account
-      }
     }
   }
 
@@ -522,48 +524,52 @@ class EngineManager {
   }
 
   private async fetchOrderbooks(tokenIds: string[]): Promise<void> {
-    const firstAcc = this.accountConfigs[0];
-    if (!firstAcc) return;
+    const host = getClobHost();
+    console.log(`[Manager] Fetching orderbooks for ${tokenIds.length} tokens...`);
 
-    try {
-      // getOrderBook is a public API — no initApiKeys needed
-      const executor = new ClobExecutor(firstAcc);
-      for (const tokenId of tokenIds) {
-        try {
-          const raw = await executor.getOrderBook(tokenId);
-          if (raw) {
-            const book: OrderBook = {
-              tokenId,
-              bids: (raw.bids || []).map((b: any) => ({
-                price: new Decimal(b.price),
-                size: new Decimal(b.size),
-              })),
-              asks: (raw.asks || []).map((a: any) => ({
-                price: new Decimal(a.price),
-                size: new Decimal(a.size),
-              })),
-              timestamp: Date.now(),
-            };
-            book.bids.sort((a, b) => b.price.minus(a.price).toNumber());
-            book.asks.sort((a, b) => a.price.minus(b.price).toNumber());
-            store.updateOrderBook(tokenId, book);
-
-            // Broadcast to connected browsers immediately
-            this.broadcast({
-              type: "orderbook_update",
-              tokenId,
-              bids: book.bids.map((b) => ({ price: b.price.toNumber(), size: b.size.toNumber() })),
-              asks: book.asks.map((a) => ({ price: a.price.toNumber(), size: a.size.toNumber() })),
-              timestamp: book.timestamp,
-            });
-            console.log(`[Manager] Fetched orderbook for ${tokenId.slice(0, 8)}... (${book.bids.length} bids, ${book.asks.length} asks)`);
-          }
-        } catch (e: any) {
-          console.error(`[Manager] Failed to fetch orderbook for ${tokenId.slice(0, 8)}...:`, e.message);
+    for (const tokenId of tokenIds) {
+      try {
+        const url = `${host}/book?token_id=${tokenId}`;
+        const resp = await fetch(url);
+        if (!resp.ok) {
+          console.error(`[Manager] Orderbook fetch HTTP ${resp.status} for ${tokenId.slice(0, 12)}...`);
+          continue;
         }
+        const raw = await resp.json();
+        if (!raw || !raw.bids || !raw.asks) {
+          console.warn(`[Manager] Orderbook empty for ${tokenId.slice(0, 12)}...`);
+          continue;
+        }
+
+        const book: OrderBook = {
+          tokenId,
+          bids: raw.bids.map((b: any) => ({
+            price: new Decimal(b.price),
+            size: new Decimal(b.size),
+          })),
+          asks: raw.asks.map((a: any) => ({
+            price: new Decimal(a.price),
+            size: new Decimal(a.size),
+          })),
+          timestamp: Date.now(),
+        };
+        book.bids.sort((a, b) => b.price.minus(a.price).toNumber());
+        book.asks.sort((a, b) => a.price.minus(b.price).toNumber());
+        store.updateOrderBook(tokenId, book);
+
+        // Broadcast to connected browsers immediately
+        this.broadcast({
+          type: "orderbook_update",
+          tokenId,
+          bids: book.bids.map((b) => ({ price: b.price.toNumber(), size: b.size.toNumber() })),
+          asks: book.asks.map((a) => ({ price: a.price.toNumber(), size: a.size.toNumber() })),
+          timestamp: book.timestamp,
+        });
+
+        console.log(`[Manager] Orderbook ${tokenId.slice(0, 12)}... : ${book.bids.length} bids, ${book.asks.length} asks`);
+      } catch (e: any) {
+        console.error(`[Manager] Orderbook fetch failed for ${tokenId.slice(0, 12)}...:`, e.message);
       }
-    } catch (e: any) {
-      console.error("[Manager] Failed to fetch orderbooks:", e.message);
     }
   }
 }

@@ -14,13 +14,13 @@ export default function MarketsPage() {
   const selectedTokenId = useAppStore((s) => s.selectedMarketTokenId);
   const setSelectedMarketToken = useAppStore((s) => s.setSelectedMarketToken);
   const orderbooks = useAppStore((s) => s.orderbooks);
+  const setOrderbooks = useAppStore((s) => s.setOrderbooks);
   const accounts = useAppStore((s) => s.accounts);
   const { post, put, del } = useApi();
 
   const [input, setInput] = useState("");
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState("");
-  const [expandedMarket, setExpandedMarket] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [savingOverride, setSavingOverride] = useState(false);
 
@@ -30,6 +30,26 @@ export default function MarketsPage() {
       setSelectedMarketToken(managedMarkets[0].tokens[0].token_id);
     }
   }, [selectedTokenId, managedMarkets, setSelectedMarketToken]);
+
+  // Fetch orderbooks from REST API on mount as fallback for WS data
+  useEffect(() => {
+    if (managedMarkets.length === 0) return;
+    // Check if we already have orderbook data for any token
+    const hasAnyBook = managedMarkets.some((m) =>
+      m.tokens.some((t) => orderbooks[t.token_id]),
+    );
+    if (hasAnyBook) return; // WS already populated data
+
+    fetch("/api/markets/orderbooks")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.orderbooks && Object.keys(data.orderbooks).length > 0) {
+          setOrderbooks(data.orderbooks);
+        }
+      })
+      .catch((e) => console.error("Orderbook REST fallback failed:", e));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [managedMarkets.length]);
 
   const selectedBook = selectedTokenId ? orderbooks[selectedTokenId] : null;
 
@@ -148,14 +168,8 @@ export default function MarketsPage() {
                 override={marketOverrides[m.conditionId] || {}}
                 globalConfig={config}
                 orderbooks={orderbooks}
-                expanded={expandedMarket === m.conditionId}
                 selectedTokenId={selectedTokenId}
                 savingOverride={savingOverride}
-                onToggleExpand={() =>
-                  setExpandedMarket((prev) =>
-                    prev === m.conditionId ? null : m.conditionId,
-                  )
-                }
                 onSelectToken={setSelectedMarketToken}
                 onSaveOverride={(o) => handleSaveOverride(m.conditionId, o)}
                 onDelete={() => setDeleteTarget(m.conditionId)}
@@ -225,10 +239,8 @@ function MarketCard({
   override,
   globalConfig,
   orderbooks,
-  expanded,
   selectedTokenId,
   savingOverride,
-  onToggleExpand,
   onSelectToken,
   onSaveOverride,
   onDelete,
@@ -237,14 +249,13 @@ function MarketCard({
   override: StrategyOverride;
   globalConfig: ReturnType<typeof useAppStore.getState>["config"];
   orderbooks: Record<string, OrderBookDto>;
-  expanded: boolean;
   selectedTokenId: string | null;
   savingOverride: boolean;
-  onToggleExpand: () => void;
   onSelectToken: (tokenId: string) => void;
   onSaveOverride: (o: StrategyOverride) => void;
   onDelete: () => void;
 }) {
+  const [showOverrides, setShowOverrides] = useState(false);
   const overrideCount = Object.keys(override).length;
 
   return (
@@ -340,11 +351,11 @@ function MarketCard({
         {/* Override Toggle */}
         <button
           className="btn btn-ghost btn-xs gap-1 -ml-1"
-          onClick={onToggleExpand}
+          onClick={() => setShowOverrides(!showOverrides)}
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
-            className={`h-3 w-3 transition-transform ${expanded ? "rotate-90" : ""}`}
+            className={`h-3 w-3 transition-transform ${showOverrides ? "rotate-90" : ""}`}
             fill="none" viewBox="0 0 24 24" stroke="currentColor"
           >
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
@@ -355,7 +366,7 @@ function MarketCard({
           )}
         </button>
 
-        {expanded && (
+        {showOverrides && (
           <OverrideEditor
             value={override}
             globalConfig={globalConfig}

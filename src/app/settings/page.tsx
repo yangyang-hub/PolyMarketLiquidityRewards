@@ -101,7 +101,7 @@ export default function SettingsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold">策略设置</h2>
-          <p className="text-sm opacity-50 mt-1">配置做市策略的挂单档位、资金参数和市场筛选规则</p>
+          <p className="text-sm opacity-50 mt-1">配置做市策略的挂单档位、资金和刷新参数</p>
         </div>
       </div>
 
@@ -205,63 +205,12 @@ export default function SettingsPage() {
                 <NumberField
                   label="每市场最大仓位"
                   unit="USDC"
-                  hint="单个市场最大持仓"
+                  hint="单个市场单侧最大持仓"
                   value={local.maxPositionPerMarket}
                   onChange={(v) => update("maxPositionPerMarket", v)}
                   overridable
                 />
-                <NumberField
-                  label="最大总敞口"
-                  unit="USDC"
-                  hint="所有市场合计上限"
-                  value={local.maxTotalExposure}
-                  onChange={(v) => update("maxTotalExposure", v)}
-                />
-                <NumberField
-                  label="价差比例"
-                  hint="占 maxSpread 的比例"
-                  value={local.spreadFraction}
-                  step={0.05}
-                  min={0}
-                  max={1}
-                  onChange={(v) => update("spreadFraction", v)}
-                  overridable
-                />
               </div>
-            </div>
-          </div>
-
-          {/* Market Selection */}
-          <div className="card bg-base-100 shadow-sm border border-base-300">
-            <div className="card-body p-5 space-y-4">
-              <div className="flex items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" /></svg>
-                <h3 className="font-semibold">市场筛选</h3>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <NumberField
-                  label="最大市场数"
-                  hint="同时做市的市场上限"
-                  value={local.maxMarkets}
-                  min={1}
-                  onChange={(v) => update("maxMarkets", Math.round(v))}
-                />
-                <NumberField
-                  label="最低日收益率"
-                  unit="USDC"
-                  hint="低于此值的市场忽略"
-                  value={local.minDailyRate}
-                  onChange={(v) => update("minDailyRate", v)}
-                />
-              </div>
-              <NumberField
-                label="报价刷新间隔"
-                unit="秒"
-                hint="每轮检查并刷新挂单的周期"
-                value={local.quoteRefreshSecs}
-                min={5}
-                onChange={(v) => update("quoteRefreshSecs", Math.round(v))}
-              />
             </div>
           </div>
         </div>

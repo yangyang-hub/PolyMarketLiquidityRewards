@@ -24,7 +24,6 @@ const FIELDS: FieldDef[] = [
   { key: "cancelDepthLevel", label: "撤单档位", type: "number", min: 0, step: 1 },
   { key: "minOrderSize", label: "最小挂单金额", type: "number", min: 0, step: 1 },
   { key: "maxPositionPerMarket", label: "每市场最大仓位", type: "number", min: 0, step: 10 },
-  { key: "spreadFraction", label: "价差比例", type: "number", min: 0, max: 1, step: 0.05 },
   { key: "quoteYes", label: "YES 方向", type: "boolean" },
   { key: "quoteNo", label: "NO 方向", type: "boolean" },
 ];

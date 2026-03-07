@@ -31,11 +31,8 @@ export interface StrategyConfig {
   cancelDepthLevel: number;
   minOrderSize: number;
   maxPositionPerMarket: number;
-  maxTotalExposure: number;
-  spreadFraction: number;
   minDailyRate: number;
   maxMarkets: number;
-  quoteRefreshSecs: number;
   quoteYes: boolean;
   quoteNo: boolean;
 }
@@ -46,7 +43,6 @@ export interface StrategyOverride {
   cancelDepthLevel?: number;
   minOrderSize?: number;
   maxPositionPerMarket?: number;
-  spreadFraction?: number;
   quoteYes?: boolean;
   quoteNo?: boolean;
 }
@@ -140,7 +136,8 @@ export interface ClobRewardData {
 export interface TokenQuote {
   bidPrice: Decimal;
   askPrice: Decimal;
-  size: Decimal;
+  bidSize: Decimal;
+  askSize: Decimal;
 }
 
 // --- Events ---

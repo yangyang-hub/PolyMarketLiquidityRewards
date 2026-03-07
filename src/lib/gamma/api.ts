@@ -1,38 +1,56 @@
 import { getGammaHost } from "../config";
-import type { MarketInfo } from "../types";
+import type { MarketInfo, MarketToken } from "../types";
 
+/**
+ * Gamma API returns camelCase fields + tokens as separate JSON strings.
+ * Map to our internal MarketInfo structure.
+ */
 interface GammaMarketResp {
-  condition_id: string;
-  question_id: string;
+  conditionId: string;
+  questionID: string;
   slug: string;
   question: string;
   active: boolean;
   closed: boolean;
-  neg_risk: boolean;
-  tokens: {
-    token_id: string;
-    outcome: string;
-    winner: boolean;
-  }[];
-  rewards?: {
-    max_spread: number;
-    min_size: number;
-  };
-  liquidity: number;
+  negRisk: boolean;
+  clobTokenIds: string; // JSON string: '["tokenId1", "tokenId2"]'
+  outcomes: string; // JSON string: '["Yes", "No"]'
+  rewardsMinSize: number;
+  rewardsMaxSpread: number;
+  liquidity: string | number;
 }
 
 function mapToMarketInfo(m: GammaMarketResp): MarketInfo {
+  // Parse clobTokenIds and outcomes from JSON strings
+  let tokenIds: string[] = [];
+  let outcomeNames: string[] = [];
+  try {
+    tokenIds = JSON.parse(m.clobTokenIds || "[]");
+  } catch { tokenIds = []; }
+  try {
+    outcomeNames = JSON.parse(m.outcomes || "[]");
+  } catch { outcomeNames = []; }
+
+  const tokens: MarketToken[] = tokenIds.map((id, i) => ({
+    token_id: id,
+    outcome: outcomeNames[i] || `Outcome ${i}`,
+    winner: false,
+  }));
+
   return {
-    condition_id: m.condition_id,
-    question_id: m.question_id,
+    condition_id: m.conditionId,
+    question_id: m.questionID,
     slug: m.slug,
     question: m.question,
     active: m.active,
     closed: m.closed,
-    neg_risk: m.neg_risk,
-    tokens: m.tokens || [],
-    rewards: m.rewards,
-    liquidity: m.liquidity || 0,
+    neg_risk: m.negRisk ?? false,
+    tokens,
+    rewards: m.rewardsMaxSpread ? {
+      max_spread: m.rewardsMaxSpread,
+      min_size: m.rewardsMinSize,
+    } : undefined,
+    liquidity: typeof m.liquidity === "string" ? parseFloat(m.liquidity) || 0 : m.liquidity || 0,
   };
 }
 

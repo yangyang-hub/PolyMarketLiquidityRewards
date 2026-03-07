@@ -1,70 +1,38 @@
 import Decimal from "decimal.js";
 import type { OrderBook, TokenQuote, StrategyConfig } from "../types";
 
-// --- Tick rounding helpers ---
+// --- Size computation ---
 
-function floorToTick(price: Decimal, tick: Decimal): Decimal {
-  return price.dividedBy(tick).floor().times(tick);
-}
-
-function ceilToTick(price: Decimal, tick: Decimal): Decimal {
-  return price.dividedBy(tick).ceil().times(tick);
-}
-
-// --- Midpoint-based quotes (order_depth_level=0) ---
-
-export function computeQuotes(
-  midpointPrice: Decimal,
-  rewardsMaxSpread: Decimal,
-  position: Decimal,
-  config: StrategyConfig,
+/**
+ * Compute order size for a given side.
+ * - Buy cost  = price * size  (USDC)
+ * - Sell cost = (1 - price) * size  (USDC, complement collateral)
+ *
+ * size = clamp(balance / unitCost, rewardsMinSize, maxPositionPerMarket)
+ * Returns 0 if balance cannot cover rewardsMinSize.
+ */
+function computeSideSize(
+  price: Decimal,
+  isBuy: boolean,
+  balance: Decimal,
   rewardsMinSize: Decimal,
-  tickSize: Decimal,
-): TokenQuote | null {
-  const halfSpread = rewardsMaxSpread
-    .times(config.spreadFraction)
-    .dividedBy(2);
+  config: StrategyConfig,
+): Decimal {
+  const unitCost = isBuy ? price : new Decimal(1).minus(price);
+  if (unitCost.isZero() || unitCost.isNeg()) return new Decimal(0);
 
-  // Inventory skew
-  const maxPos = new Decimal(config.maxPositionPerMarket);
-  let inventoryRatio = new Decimal(0);
-  if (maxPos.greaterThan(0)) {
-    inventoryRatio = Decimal.min(
-      Decimal.max(position.dividedBy(maxPos), new Decimal(-1)),
-      new Decimal(1),
-    );
-  }
-
-  const skewFactor = new Decimal(0.5); // default skew factor
-  const skew = inventoryRatio.times(skewFactor).times(halfSpread);
-
-  const bidHalf = halfSpread.plus(skew);
-  const askHalf = halfSpread.minus(skew);
-
-  let bidPrice = floorToTick(midpointPrice.minus(bidHalf), tickSize);
-  let askPrice = ceilToTick(midpointPrice.plus(askHalf), tickSize);
-
-  // Clamp to [0.01, 0.99]
-  const minPrice = new Decimal("0.01");
-  const maxPrice = new Decimal("0.99");
-  bidPrice = Decimal.max(bidPrice, minPrice);
-  askPrice = Decimal.min(askPrice, maxPrice);
-
-  // Validate: not crossed
-  if (bidPrice.greaterThanOrEqualTo(askPrice)) return null;
-
-  // Validate: within rewards_max_spread of midpoint
-  if (midpointPrice.minus(bidPrice).greaterThan(rewardsMaxSpread)) return null;
-  if (askPrice.minus(midpointPrice).greaterThan(rewardsMaxSpread)) return null;
-
-  // Size
+  const affordable = balance.dividedBy(unitCost).toDecimalPlaces(2, Decimal.ROUND_DOWN);
   const minSize = Decimal.max(new Decimal(config.minOrderSize), rewardsMinSize);
-  const size = Decimal.max(new Decimal(config.maxPositionPerMarket), minSize);
+  const maxSize = new Decimal(config.maxPositionPerMarket);
 
-  return { bidPrice, askPrice, size };
+  // If balance can't cover minimum, skip
+  if (affordable.lessThan(minSize)) return new Decimal(0);
+
+  // Clamp: at least minSize, at most maxPositionPerMarket, at most affordable
+  return Decimal.min(Decimal.max(affordable, minSize), maxSize);
 }
 
-// --- Depth-based quotes (order_depth_level > 0) ---
+// --- Depth-based quotes ---
 
 export function computeDepthQuotes(
   book: OrderBook,
@@ -73,6 +41,7 @@ export function computeDepthQuotes(
   _position: Decimal,
   config: StrategyConfig,
   rewardsMinSize: Decimal,
+  balance: Decimal,
 ): TokenQuote | null {
   if (depthLevel < 1) return null;
 
@@ -93,18 +62,19 @@ export function computeDepthQuotes(
   if (bidPrice.lessThan(minPrice) || askPrice.greaterThan(maxPrice)) return null;
 
   // Validate: within rewards_max_spread
-  // Use best bid/ask midpoint for spread check
   if (book.bids.length > 0 && book.asks.length > 0) {
     const mid = book.bids[0].price.plus(book.asks[0].price).dividedBy(2);
     if (mid.minus(bidPrice).greaterThan(rewardsMaxSpread)) return null;
     if (askPrice.minus(mid).greaterThan(rewardsMaxSpread)) return null;
   }
 
-  // Size
-  const minSize = Decimal.max(new Decimal(config.minOrderSize), rewardsMinSize);
-  const size = Decimal.max(new Decimal(config.maxPositionPerMarket), minSize);
+  // Size per side
+  const bidSize = computeSideSize(bidPrice, true, balance, rewardsMinSize, config);
+  const askSize = computeSideSize(askPrice, false, balance, rewardsMinSize, config);
 
-  return { bidPrice, askPrice, size };
+  if (bidSize.isZero() && askSize.isZero()) return null;
+
+  return { bidPrice, askPrice, bidSize, askSize };
 }
 
 // --- Cancel decision ---
@@ -118,14 +88,12 @@ export function shouldCancelDepthOrder(
   if (cancelDepthLevel === 0) return false;
 
   if (isBuy) {
-    // Count bids with price strictly above our order
     const above = book.bids.filter((level) =>
       level.price.greaterThan(orderPrice)
     ).length;
     const position = above + 1;
     return position <= cancelDepthLevel;
   } else {
-    // Count asks with price strictly below our order
     const below = book.asks.filter((level) =>
       level.price.lessThan(orderPrice)
     ).length;

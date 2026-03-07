@@ -7,11 +7,8 @@ export const defaultConfig: StrategyConfig = {
   cancelDepthLevel: 2,
   minOrderSize: 5,
   maxPositionPerMarket: 100,
-  maxTotalExposure: 500,
-  spreadFraction: 0.8,
   minDailyRate: 1,
   maxMarkets: 10,
-  quoteRefreshSecs: 60,
   quoteYes: true,
   quoteNo: true,
 };

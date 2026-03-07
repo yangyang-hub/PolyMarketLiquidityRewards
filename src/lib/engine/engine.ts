@@ -5,11 +5,9 @@ import type {
   ActiveOrder,
   OrderEvent,
 } from "../types";
-import { midpoint } from "../types";
 import { ClobExecutor } from "../clob/executor";
 import {
   computeDepthQuotes,
-  computeQuotes,
   shouldCancelDepthOrder,
 } from "../strategy/depth-strategy";
 import { resolveConfig } from "../strategy/config-resolver";
@@ -19,9 +17,12 @@ export class AccountEngine {
   private account: AccountConfig;
   private executor: ClobExecutor;
   private running = false;
-  private loopTimer: ReturnType<typeof setTimeout> | null = null;
+  private tickTimer: ReturnType<typeof setTimeout> | null = null;
+  private ticking = false;
   private onEvent: (event: OrderEvent) => void;
   private onStateChange: (name: string, state: AccountState) => void;
+
+  private static DEBOUNCE_MS = 2000; // coalesce rapid book updates
 
   constructor(
     account: AccountConfig,
@@ -45,7 +46,8 @@ export class AccountEngine {
       const balance = await this.executor.getCollateralBalance();
       store.updateAccount(this.account.name, { status: "running", balance });
       this.broadcastState();
-      this.loop();
+      // Run initial tick immediately
+      this.scheduleTick();
     } catch (e: any) {
       console.error(`[Engine:${this.account.name}] Init failed:`, e.message);
       store.updateAccount(this.account.name, { status: "error", error: e.message });
@@ -61,9 +63,9 @@ export class AccountEngine {
     store.updateAccount(this.account.name, { status: "stopping" });
     this.broadcastState();
 
-    if (this.loopTimer) {
-      clearTimeout(this.loopTimer);
-      this.loopTimer = null;
+    if (this.tickTimer) {
+      clearTimeout(this.tickTimer);
+      this.tickTimer = null;
     }
 
     // Cancel all orders and wait for completion
@@ -83,19 +85,25 @@ export class AccountEngine {
     return this.running;
   }
 
-  private async loop(): Promise<void> {
+  /** Called by manager when an orderbook update arrives. Debounces into a tick. */
+  onBookUpdate(_tokenId: string): void {
     if (!this.running) return;
+    this.scheduleTick();
+  }
 
-    try {
-      await this.tick();
-    } catch (e: any) {
-      console.error(`[Engine:${this.account.name}] Tick error:`, e.message);
-    }
-
-    if (this.running) {
-      const interval = store.config.quoteRefreshSecs * 1000;
-      this.loopTimer = setTimeout(() => this.loop(), interval);
-    }
+  private scheduleTick(): void {
+    if (this.tickTimer) return; // already scheduled
+    this.tickTimer = setTimeout(async () => {
+      this.tickTimer = null;
+      if (!this.running || this.ticking) return;
+      this.ticking = true;
+      try {
+        await this.tick();
+      } catch (e: any) {
+        console.error(`[Engine:${this.account.name}] Tick error:`, e.message);
+      }
+      this.ticking = false;
+    }, AccountEngine.DEBOUNCE_MS);
   }
 
   private async tick(): Promise<void> {
@@ -105,6 +113,8 @@ export class AccountEngine {
       console.log(`[Engine:${this.account.name}] No managed markets available`);
       return;
     }
+
+    console.log(`[Engine:${this.account.name}] Tick: ${markets.length} markets, ${store.orderbooks.size} orderbooks cached`);
 
     // Get all open orders
     const openOrders = await this.executor.getOpenOrders();
@@ -122,6 +132,9 @@ export class AccountEngine {
     const allOrderIds = openOrders.map((o) => o.id);
     const scoringMap = await this.executor.areOrdersScoring(allOrderIds);
 
+    // Track which orders were cancelled this tick
+    const cancelledOrderIds = new Set<string>();
+
     // Process each market
     for (const market of markets) {
       // Resolve layered config: global -> account override -> market override
@@ -136,15 +149,21 @@ export class AccountEngine {
 
       for (const token of market.tokens) {
         const tokenId = token.token_id;
-        const isYes = token.outcome === "Yes";
 
-        // Skip if config says no
-        if (isYes && !config.quoteYes) continue;
-        if (!isYes && !config.quoteNo) continue;
+        // Skip based on outcome type
+        // First token = "Yes" side, second token = "No" side
+        const tokenIndex = market.tokens.indexOf(token);
+        const isFirstOutcome = tokenIndex === 0;
+
+        if (isFirstOutcome && !config.quoteYes) continue;
+        if (!isFirstOutcome && !config.quoteNo) continue;
 
         // Get orderbook
         const book = store.orderbooks.get(tokenId);
-        if (!book || book.bids.length === 0 || book.asks.length === 0) continue;
+        if (!book || book.bids.length === 0 || book.asks.length === 0) {
+          console.log(`[Engine:${this.account.name}] ${token.outcome}: no orderbook data (bids=${book?.bids.length ?? 0}, asks=${book?.asks.length ?? 0})`);
+          continue;
+        }
 
         const existingOrders = ordersByToken.get(tokenId) || [];
 
@@ -165,62 +184,58 @@ export class AccountEngine {
               console.log(`[Engine:${this.account.name}] Cancelling ${order.id} (depth trigger)`);
               const cancelled = await this.executor.cancelOrder(order.id);
               if (cancelled) {
+                cancelledOrderIds.add(order.id);
                 this.emitEvent("cancelled", order, market.slug);
               }
             } else {
               // Track as active
               trackedOrders.push(this.toActiveOrder(order, market.slug, scoringMap));
-              continue;
             }
           }
         }
 
-        // Place new orders if we have no active ones
-        // Compute quotes
-        let quote = null;
-        if (config.orderDepthLevel > 0) {
-          quote = computeDepthQuotes(
-            book,
-            config.orderDepthLevel,
-            rewardsMaxSpread,
-            new Decimal(0), // position tracking simplified
-            config,
-            rewardsMinSize,
-          );
-        } else {
-          const mid = midpoint(book);
-          if (mid) {
-            quote = computeQuotes(
-              mid,
-              rewardsMaxSpread,
-              new Decimal(0),
-              config,
-              rewardsMinSize,
-              new Decimal("0.01"),
-            );
-          }
+        // Get account balance for sizing
+        const accountState = store.accounts.get(this.account.name);
+        const balance = new Decimal(accountState?.balance || 0);
+
+        // Compute quotes at depth level
+        const quote = computeDepthQuotes(
+          book,
+          config.orderDepthLevel,
+          rewardsMaxSpread,
+          new Decimal(0),
+          config,
+          rewardsMinSize,
+          balance,
+        );
+
+        if (!quote) {
+          console.log(`[Engine:${this.account.name}] ${token.outcome}: quote=null (depth=${config.orderDepthLevel}, bids=${book.bids.length}, asks=${book.asks.length}, maxSpread=${rewardsMaxSpread}, balance=$${balance})`);
+          continue;
         }
 
-        if (!quote) continue;
+        console.log(`[Engine:${this.account.name}] ${token.outcome}: quote bid=${quote.bidPrice}×${quote.bidSize} ask=${quote.askPrice}×${quote.askSize} (balance=$${balance})`);
 
-        // Check if we already have orders at these prices
+        // Check if we already have LIVE (non-cancelled) orders at these prices
         const hasBuyAtPrice = existingOrders.some(
           (o) =>
+            !cancelledOrderIds.has(o.id) &&
             o.side?.toUpperCase() === "BUY" &&
             new Decimal(o.price).equals(quote!.bidPrice),
         );
         const hasSellAtPrice = existingOrders.some(
           (o) =>
+            !cancelledOrderIds.has(o.id) &&
             o.side?.toUpperCase() === "SELL" &&
             new Decimal(o.price).equals(quote!.askPrice),
         );
 
         // Place buy
-        if (!hasBuyAtPrice && config.quoteYes) {
+        if (!hasBuyAtPrice && quote.bidSize.greaterThan(0)) {
           const orderId = await this.executor.buyLimitPostOnly(
             tokenId,
             quote.bidPrice,
-            quote.size,
+            quote.bidSize,
           );
           if (orderId) {
             const activeOrder: ActiveOrder = {
@@ -229,22 +244,22 @@ export class AccountEngine {
               marketSlug: market.slug,
               side: "buy",
               price: quote.bidPrice.toNumber(),
-              size: quote.size.toNumber(),
+              size: quote.bidSize.toNumber(),
               status: "open",
               scoring: false,
               timestamp: Date.now(),
             };
             trackedOrders.push(activeOrder);
-            this.emitEvent("placed", { id: orderId, asset_id: tokenId, side: "BUY", price: quote.bidPrice.toString(), original_size: quote.size.toString() } as any, market.slug);
+            this.emitEvent("placed", { id: orderId, asset_id: tokenId, side: "BUY", price: quote.bidPrice.toString(), original_size: quote.bidSize.toString() } as any, market.slug);
           }
         }
 
         // Place sell
-        if (!hasSellAtPrice && config.quoteNo) {
+        if (!hasSellAtPrice && quote.askSize.greaterThan(0)) {
           const orderId = await this.executor.sellLimitPostOnly(
             tokenId,
             quote.askPrice,
-            quote.size,
+            quote.askSize,
           );
           if (orderId) {
             const activeOrder: ActiveOrder = {
@@ -253,13 +268,13 @@ export class AccountEngine {
               marketSlug: market.slug,
               side: "sell",
               price: quote.askPrice.toNumber(),
-              size: quote.size.toNumber(),
+              size: quote.askSize.toNumber(),
               status: "open",
               scoring: false,
               timestamp: Date.now(),
             };
             trackedOrders.push(activeOrder);
-            this.emitEvent("placed", { id: orderId, asset_id: tokenId, side: "SELL", price: quote.askPrice.toString(), original_size: quote.size.toString() } as any, market.slug);
+            this.emitEvent("placed", { id: orderId, asset_id: tokenId, side: "SELL", price: quote.askPrice.toString(), original_size: quote.askSize.toString() } as any, market.slug);
           }
         }
       }

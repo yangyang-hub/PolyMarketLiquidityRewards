@@ -34,6 +34,7 @@ interface AppState {
   setAccounts: (accounts: AccountState[]) => void;
   setAccountConfigs: (configs: AccountConfigDto[]) => void;
   setManagedMarkets: (markets: ManagedMarketDto[]) => void;
+  setOrderbooks: (books: Record<string, OrderBookDto>) => void;
   setWsConnected: (connected: boolean) => void;
 }
 
@@ -63,8 +64,8 @@ export const useAppStore = create<AppState>((set) => ({
               ...state.orderbooks,
               [msg.tokenId]: {
                 tokenId: msg.tokenId,
-                bids: msg.bids,
-                asks: msg.asks,
+                bids: [...msg.bids].sort((a, b) => b.price - a.price),
+                asks: [...msg.asks].sort((a, b) => a.price - b.price),
                 timestamp: msg.timestamp,
               },
             },
@@ -132,5 +133,16 @@ export const useAppStore = create<AppState>((set) => ({
   setAccounts: (accounts) => set({ accounts }),
   setAccountConfigs: (configs) => set({ accountConfigs: configs }),
   setManagedMarkets: (markets) => set({ managedMarkets: markets }),
+  setOrderbooks: (books) => set((state) => {
+    const sorted: Record<string, typeof books[string]> = {};
+    for (const [tokenId, book] of Object.entries(books)) {
+      sorted[tokenId] = {
+        ...book,
+        bids: [...book.bids].sort((a, b) => b.price - a.price),
+        asks: [...book.asks].sort((a, b) => a.price - b.price),
+      };
+    }
+    return { orderbooks: { ...state.orderbooks, ...sorted } };
+  }),
   setWsConnected: (connected) => set({ wsConnected: connected }),
 }));
