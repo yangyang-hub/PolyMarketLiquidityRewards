@@ -153,7 +153,6 @@ function AccountCardItem({
   onCancelOrder,
   onCancelAll,
   onSaveOverride,
-  onApprove,
 }: {
   name: string;
   account?: AccountState;
@@ -168,22 +167,11 @@ function AccountCardItem({
   onCancelOrder: (orderId: string) => Promise<void>;
   onCancelAll: () => Promise<void>;
   onSaveOverride: (o: StrategyOverride) => void;
-  onApprove: () => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showOverrides, setShowOverrides] = useState(false);
-  const [approving, setApproving] = useState(false);
   const hasOrders = account && account.activeOrders.length > 0;
   const overrideCount = Object.keys(override).length;
-
-  const handleApprove = async () => {
-    setApproving(true);
-    try {
-      await onApprove();
-    } finally {
-      setApproving(false);
-    }
-  };
 
   return (
     <div className="card bg-base-100 shadow-sm border border-base-300 transition-shadow hover:shadow-md">
@@ -251,20 +239,6 @@ function AccountCardItem({
                 启动
               </button>
             ) : null}
-            {account && (
-              <button
-                className="btn btn-ghost btn-xs tooltip tooltip-bottom"
-                data-tip="刷新链上授权"
-                onClick={handleApprove}
-                disabled={approving}
-              >
-                {approving ? (
-                  <span className="loading loading-spinner loading-xs" />
-                ) : (
-                  "授权"
-                )}
-              </button>
-            )}
           </div>
         </div>
 
@@ -580,7 +554,6 @@ export default function AccountsPage() {
                 onCancelOrder={async (orderId) => { await post(`/api/accounts/${encodeURIComponent(name)}/cancel-order`, { orderId }); }}
                 onCancelAll={async () => { await post(`/api/accounts/${encodeURIComponent(name)}/cancel-all`); }}
                 onSaveOverride={(o) => handleSaveOverride(name, o)}
-                onApprove={async () => { await post(`/api/accounts/${encodeURIComponent(name)}/approve`); }}
               />
             );
           })}
