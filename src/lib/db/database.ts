@@ -1,27 +1,27 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
-import type { AccountConfig, StrategyConfig } from "../types";
+import type { AccountConfig, StrategyConfig, ManagedMarket, StrategyOverride } from "../types";
 import type { AccountMeta } from "../types";
 import { encryptPrivateKey, decryptPrivateKey } from "./crypto";
 import { defaultConfig } from "../config";
 
 const DB_PATH = path.join(process.cwd(), "data", "app.db");
 
-let _db: Database.Database | null = null;
+const g = globalThis as typeof globalThis & { __appDb?: Database.Database };
 
 function getDb(): Database.Database {
-  if (_db) return _db;
+  if (g.__appDb) return g.__appDb;
 
   const dir = path.dirname(DB_PATH);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
-  _db = new Database(DB_PATH);
-  _db.pragma("journal_mode = WAL");
+  const db = new Database(DB_PATH);
+  db.pragma("journal_mode = WAL");
 
-  _db.exec(`
+  db.exec(`
     CREATE TABLE IF NOT EXISTS accounts (
       name TEXT PRIMARY KEY,
       encrypted_key TEXT NOT NULL,
@@ -38,12 +38,35 @@ function getDb(): Database.Database {
       value TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS enabled_markets (
-      condition_id TEXT PRIMARY KEY
+    CREATE TABLE IF NOT EXISTS markets (
+      condition_id TEXT PRIMARY KEY,
+      slug TEXT NOT NULL,
+      question TEXT NOT NULL,
+      tokens_json TEXT NOT NULL,
+      neg_risk INTEGER NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1,
+      rewards_max_spread REAL NOT NULL DEFAULT 0,
+      rewards_min_size REAL NOT NULL DEFAULT 0,
+      daily_rate REAL NOT NULL DEFAULT 0,
+      liquidity REAL NOT NULL DEFAULT 0,
+      added_at INTEGER NOT NULL DEFAULT (unixepoch())
     );
+
+    CREATE TABLE IF NOT EXISTS account_overrides (
+      account_name TEXT PRIMARY KEY REFERENCES accounts(name) ON DELETE CASCADE,
+      overrides_json TEXT NOT NULL DEFAULT '{}'
+    );
+
+    CREATE TABLE IF NOT EXISTS market_overrides (
+      condition_id TEXT PRIMARY KEY REFERENCES markets(condition_id) ON DELETE CASCADE,
+      overrides_json TEXT NOT NULL DEFAULT '{}'
+    );
+
+    DROP TABLE IF EXISTS enabled_markets;
   `);
 
-  return _db;
+  g.__appDb = db;
+  return db;
 }
 
 // --- Accounts ---
@@ -165,23 +188,122 @@ export function dbSaveStrategyConfig(config: StrategyConfig): void {
   tx();
 }
 
-// --- Enabled Markets ---
+// --- Managed Markets ---
 
-export function dbGetEnabledMarketIds(): string[] {
+export function dbAddMarket(market: ManagedMarket): void {
+  getDb()
+    .prepare(
+      `INSERT OR REPLACE INTO markets (condition_id, slug, question, tokens_json, neg_risk, active, rewards_max_spread, rewards_min_size, daily_rate, liquidity, added_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      market.conditionId,
+      market.slug,
+      market.question,
+      JSON.stringify(market.tokens),
+      market.negRisk ? 1 : 0,
+      market.active ? 1 : 0,
+      market.rewardsMaxSpread,
+      market.rewardsMinSize,
+      market.dailyRate,
+      market.liquidity,
+      market.addedAt,
+    );
+}
+
+export function dbRemoveMarket(conditionId: string): void {
+  getDb().prepare("DELETE FROM markets WHERE condition_id = ?").run(conditionId);
+}
+
+export function dbGetAllMarkets(): ManagedMarket[] {
   const rows = getDb()
-    .prepare("SELECT condition_id FROM enabled_markets")
-    .all() as { condition_id: string }[];
-  return rows.map((r) => r.condition_id);
+    .prepare("SELECT * FROM markets ORDER BY added_at DESC")
+    .all() as any[];
+  return rows.map((row) => ({
+    conditionId: row.condition_id,
+    slug: row.slug,
+    question: row.question,
+    tokens: JSON.parse(row.tokens_json),
+    negRisk: row.neg_risk === 1,
+    active: row.active === 1,
+    rewardsMaxSpread: row.rewards_max_spread,
+    rewardsMinSize: row.rewards_min_size,
+    dailyRate: row.daily_rate,
+    liquidity: row.liquidity,
+    addedAt: row.added_at,
+  }));
 }
 
-export function dbEnableMarket(conditionId: string): void {
+export function dbUpdateMarketRewards(
+  conditionId: string,
+  rewardsMaxSpread: number,
+  rewardsMinSize: number,
+  dailyRate: number,
+  liquidity: number,
+): void {
   getDb()
-    .prepare("INSERT OR IGNORE INTO enabled_markets (condition_id) VALUES (?)")
-    .run(conditionId);
+    .prepare(
+      `UPDATE markets SET rewards_max_spread = ?, rewards_min_size = ?, daily_rate = ?, liquidity = ? WHERE condition_id = ?`,
+    )
+    .run(rewardsMaxSpread, rewardsMinSize, dailyRate, liquidity, conditionId);
 }
 
-export function dbDisableMarket(conditionId: string): void {
+// --- Account Overrides ---
+
+export function dbGetAccountOverride(accountName: string): StrategyOverride {
+  const row = getDb()
+    .prepare("SELECT overrides_json FROM account_overrides WHERE account_name = ?")
+    .get(accountName) as { overrides_json: string } | undefined;
+  if (!row) return {};
+  return JSON.parse(row.overrides_json);
+}
+
+export function dbSetAccountOverride(accountName: string, override: StrategyOverride): void {
   getDb()
-    .prepare("DELETE FROM enabled_markets WHERE condition_id = ?")
-    .run(conditionId);
+    .prepare(
+      `INSERT INTO account_overrides (account_name, overrides_json) VALUES (?, ?)
+       ON CONFLICT(account_name) DO UPDATE SET overrides_json = excluded.overrides_json`,
+    )
+    .run(accountName, JSON.stringify(override));
+}
+
+export function dbGetAllAccountOverrides(): Record<string, StrategyOverride> {
+  const rows = getDb()
+    .prepare("SELECT account_name, overrides_json FROM account_overrides")
+    .all() as { account_name: string; overrides_json: string }[];
+  const result: Record<string, StrategyOverride> = {};
+  for (const row of rows) {
+    result[row.account_name] = JSON.parse(row.overrides_json);
+  }
+  return result;
+}
+
+// --- Market Overrides ---
+
+export function dbGetMarketOverride(conditionId: string): StrategyOverride {
+  const row = getDb()
+    .prepare("SELECT overrides_json FROM market_overrides WHERE condition_id = ?")
+    .get(conditionId) as { overrides_json: string } | undefined;
+  if (!row) return {};
+  return JSON.parse(row.overrides_json);
+}
+
+export function dbSetMarketOverride(conditionId: string, override: StrategyOverride): void {
+  getDb()
+    .prepare(
+      `INSERT INTO market_overrides (condition_id, overrides_json) VALUES (?, ?)
+       ON CONFLICT(condition_id) DO UPDATE SET overrides_json = excluded.overrides_json`,
+    )
+    .run(conditionId, JSON.stringify(override));
+}
+
+export function dbGetAllMarketOverrides(): Record<string, StrategyOverride> {
+  const rows = getDb()
+    .prepare("SELECT condition_id, overrides_json FROM market_overrides")
+    .all() as { condition_id: string; overrides_json: string }[];
+  const result: Record<string, StrategyOverride> = {};
+  for (const row of rows) {
+    result[row.condition_id] = JSON.parse(row.overrides_json);
+  }
+  return result;
 }

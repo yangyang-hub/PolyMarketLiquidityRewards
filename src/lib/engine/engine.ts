@@ -12,6 +12,7 @@ import {
   computeQuotes,
   shouldCancelDepthOrder,
 } from "../strategy/depth-strategy";
+import { resolveConfig } from "../strategy/config-resolver";
 import { store } from "../store/memory-store";
 
 export class AccountEngine {
@@ -41,7 +42,8 @@ export class AccountEngine {
 
     try {
       await this.executor.initApiKeys();
-      store.updateAccount(this.account.name, { status: "running" });
+      const balance = await this.executor.getCollateralBalance();
+      store.updateAccount(this.account.name, { status: "running", balance });
       this.broadcastState();
       this.loop();
     } catch (e: any) {
@@ -97,13 +99,10 @@ export class AccountEngine {
   }
 
   private async tick(): Promise<void> {
-    const config = store.config;
-    const markets = store.rewardMarkets.filter((c) =>
-      store.enabledMarketIds.has(c.market.condition_id),
-    );
+    const markets = store.managedMarkets.filter((m) => m.active);
 
     if (markets.length === 0) {
-      console.log(`[Engine:${this.account.name}] No reward markets available`);
+      console.log(`[Engine:${this.account.name}] No managed markets available`);
       return;
     }
 
@@ -111,7 +110,7 @@ export class AccountEngine {
     const openOrders = await this.executor.getOpenOrders();
     const trackedOrders: ActiveOrder[] = [];
 
-    // Build map of token → orders
+    // Build map of token -> orders
     const ordersByToken = new Map<string, typeof openOrders>();
     for (const o of openOrders) {
       const list = ordersByToken.get(o.asset_id) || [];
@@ -124,8 +123,16 @@ export class AccountEngine {
     const scoringMap = await this.executor.areOrdersScoring(allOrderIds);
 
     // Process each market
-    for (const candidate of markets) {
-      const { market } = candidate;
+    for (const market of markets) {
+      // Resolve layered config: global -> account override -> market override
+      const config = resolveConfig(
+        store.config,
+        store.accountOverrides[this.account.name],
+        store.marketOverrides[market.conditionId],
+      );
+
+      const rewardsMaxSpread = new Decimal(market.rewardsMaxSpread);
+      const rewardsMinSize = new Decimal(market.rewardsMinSize);
 
       for (const token of market.tokens) {
         const tokenId = token.token_id;
@@ -175,20 +182,20 @@ export class AccountEngine {
           quote = computeDepthQuotes(
             book,
             config.orderDepthLevel,
-            candidate.clobRewardsMaxSpread,
+            rewardsMaxSpread,
             new Decimal(0), // position tracking simplified
             config,
-            candidate.clobRewardsMinSize,
+            rewardsMinSize,
           );
         } else {
           const mid = midpoint(book);
           if (mid) {
             quote = computeQuotes(
               mid,
-              candidate.clobRewardsMaxSpread,
+              rewardsMaxSpread,
               new Decimal(0),
               config,
-              candidate.clobRewardsMinSize,
+              rewardsMinSize,
               new Decimal("0.01"),
             );
           }
@@ -258,10 +265,12 @@ export class AccountEngine {
       }
     }
 
-    // Update account state
+    // Update account state (including balance)
+    const balance = await this.executor.getCollateralBalance();
     store.updateAccount(this.account.name, {
       activeOrders: trackedOrders,
       marketsCount: markets.length,
+      balance,
     });
     this.broadcastState();
   }

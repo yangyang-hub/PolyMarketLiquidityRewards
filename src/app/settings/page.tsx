@@ -15,6 +15,7 @@ function NumberField({
   min,
   max,
   onChange,
+  overridable,
 }: {
   label: string;
   hint?: string;
@@ -24,11 +25,17 @@ function NumberField({
   min?: number;
   max?: number;
   onChange: (v: number) => void;
+  overridable?: boolean;
 }) {
   return (
     <div className="space-y-1">
       <div className="flex items-baseline justify-between">
-        <span className="text-sm">{label}</span>
+        <span className="text-sm flex items-center gap-1.5">
+          {label}
+          {overridable && (
+            <span className="badge badge-outline badge-xs opacity-50">可覆盖</span>
+          )}
+        </span>
         {unit && <span className="text-xs opacity-40">{unit}</span>}
       </div>
       <input
@@ -109,6 +116,7 @@ export default function SettingsPage() {
               <div className="flex items-center gap-2">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" /></svg>
                 <h3 className="font-semibold">档位设置</h3>
+                <span className="badge badge-outline badge-xs opacity-50">可覆盖</span>
               </div>
               <DepthSelector
                 label="挂单档位"
@@ -132,6 +140,7 @@ export default function SettingsPage() {
               <div className="flex items-center gap-2">
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" /></svg>
                 <h3 className="font-semibold">报价方向</h3>
+                <span className="badge badge-outline badge-xs opacity-50">可覆盖</span>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <label
@@ -191,6 +200,7 @@ export default function SettingsPage() {
                   hint="单笔订单最低金额"
                   value={local.minOrderSize}
                   onChange={(v) => update("minOrderSize", v)}
+                  overridable
                 />
                 <NumberField
                   label="每市场最大仓位"
@@ -198,6 +208,7 @@ export default function SettingsPage() {
                   hint="单个市场最大持仓"
                   value={local.maxPositionPerMarket}
                   onChange={(v) => update("maxPositionPerMarket", v)}
+                  overridable
                 />
                 <NumberField
                   label="最大总敞口"
@@ -214,6 +225,7 @@ export default function SettingsPage() {
                   min={0}
                   max={1}
                   onChange={(v) => update("spreadFraction", v)}
+                  overridable
                 />
               </div>
             </div>

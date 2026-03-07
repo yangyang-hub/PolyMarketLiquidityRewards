@@ -57,23 +57,34 @@ export interface StrategyConfig {
   quoteNo: boolean;
 }
 
+export interface StrategyOverride {
+  orderDepthLevel?: number;
+  cancelDepthLevel?: number;
+  minOrderSize?: number;
+  maxPositionPerMarket?: number;
+  spreadFraction?: number;
+  quoteYes?: boolean;
+  quoteNo?: boolean;
+}
+
 export interface MarketToken {
   token_id: string;
   outcome: string;
   winner: boolean;
 }
 
-export interface RewardMarketDto {
+export interface ManagedMarketDto {
   conditionId: string;
   slug: string;
   question: string;
-  density: number;
-  dailyRate: number;
-  maxSpread: number;
-  minSize: number;
-  liquidity: number;
   tokens: MarketToken[];
-  enabled: boolean;
+  negRisk: boolean;
+  active: boolean;
+  rewardsMaxSpread: number;
+  rewardsMinSize: number;
+  dailyRate: number;
+  liquidity: number;
+  addedAt: number;
 }
 
 export type OrderEventType = "placed" | "cancelled" | "filled" | "moved";
@@ -114,18 +125,25 @@ export type WsMessage =
       totalMarkets: number;
     }
   | {
-      type: "reward_markets";
-      markets: RewardMarketDto[];
-      enabledIds?: string[];
+      type: "managed_markets";
+      markets: ManagedMarketDto[];
+    }
+  | {
+      type: "market_added";
+      market: ManagedMarketDto;
+    }
+  | {
+      type: "market_removed";
+      conditionId: string;
+    }
+  | {
+      type: "overrides_update";
+      accountOverrides: Record<string, StrategyOverride>;
+      marketOverrides: Record<string, StrategyOverride>;
     }
   | {
       type: "config_update";
       config: StrategyConfig;
-    }
-  | {
-      type: "market_toggle";
-      conditionId: string;
-      enabled: boolean;
     }
   | {
       type: "account_configs";

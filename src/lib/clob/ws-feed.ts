@@ -5,6 +5,9 @@ import { getClobWsHost } from "../config";
 
 type OrderBookCallback = (tokenId: string, book: OrderBook) => void;
 
+const HEARTBEAT_INTERVAL = 10_000; // 10s ping
+const STALE_TIMEOUT = 30_000; // 30s without any message → reconnect
+
 export class ClobWsFeed {
   private ws: WebSocket | null = null;
   private subscribedTokens: Set<string> = new Set();
@@ -14,8 +17,7 @@ export class ClobWsFeed {
   private maxBackoff = 60000;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private staleTimer: ReturnType<typeof setTimeout> | null = null;
-  private lastMessage = 0;
-  private staleTimeoutMs = 60000;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   public connected = false;
 
@@ -32,14 +34,7 @@ export class ClobWsFeed {
   stop(): void {
     this.running = false;
     this.connected = false;
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    if (this.staleTimer) {
-      clearTimeout(this.staleTimer);
-      this.staleTimer = null;
-    }
+    this.clearTimers();
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -50,7 +45,7 @@ export class ClobWsFeed {
     for (const id of tokenIds) {
       this.subscribedTokens.add(id);
     }
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && tokenIds.length > 0) {
       this.sendSubscribe(tokenIds);
     }
   }
@@ -59,7 +54,7 @@ export class ClobWsFeed {
     for (const id of tokenIds) {
       this.subscribedTokens.delete(id);
     }
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && tokenIds.length > 0) {
       this.sendUnsubscribe(tokenIds);
     }
   }
@@ -80,23 +75,27 @@ export class ClobWsFeed {
 
     this.ws.on("open", () => {
       console.log("[WsFeed] Connected");
-      this.backoff = 1000; // Reset backoff on success
+      this.backoff = 1000;
       this.connected = true;
 
-      // Subscribe to all tracked tokens
+      // Initial subscription for all tracked tokens
       if (this.subscribedTokens.size > 0) {
-        this.sendSubscribe([...this.subscribedTokens]);
+        this.sendInitialSubscription();
       }
 
+      this.startHeartbeat();
       this.resetStaleTimer();
     });
 
     this.ws.on("message", (data: WebSocket.Data) => {
-      this.lastMessage = Date.now();
       this.resetStaleTimer();
 
+      const raw = data.toString();
+      // Ignore PONG responses
+      if (raw === "PONG") return;
+
       try {
-        const msg = JSON.parse(data.toString());
+        const msg = JSON.parse(raw);
         this.handleMessage(msg);
       } catch {
         // Ignore malformed messages
@@ -111,25 +110,28 @@ export class ClobWsFeed {
       console.log("[WsFeed] Disconnected");
       this.connected = false;
       this.ws = null;
+      this.stopHeartbeat();
       this.scheduleReconnect();
     });
   }
 
   private handleMessage(msg: any): void {
-    // CLOB WS sends book snapshots and updates
-    // Format: { market: string, asset_id: string, bids: [[price, size], ...], asks: [[price, size], ...], timestamp: ... }
-    // Or array format from event-based updates
     const events = Array.isArray(msg) ? msg : [msg];
 
     for (const event of events) {
+      // Only process book events with orderbook data
+      if (event.event_type && event.event_type !== "book") continue;
+
       const tokenId = event.asset_id;
       if (!tokenId || !this.subscribedTokens.has(tokenId)) continue;
+      if (!event.bids && !event.asks) continue;
 
       const bids: PriceLevel[] = (event.bids || [])
         .map((b: any) => ({
           price: new Decimal(Array.isArray(b) ? b[0] : b.price),
           size: new Decimal(Array.isArray(b) ? b[1] : b.size),
         }))
+        .filter((b: PriceLevel) => b.size.greaterThan(0))
         .sort((a: PriceLevel, b: PriceLevel) => b.price.minus(a.price).toNumber());
 
       const asks: PriceLevel[] = (event.asks || [])
@@ -137,39 +139,76 @@ export class ClobWsFeed {
           price: new Decimal(Array.isArray(a) ? a[0] : a.price),
           size: new Decimal(Array.isArray(a) ? a[1] : a.size),
         }))
+        .filter((a: PriceLevel) => a.size.greaterThan(0))
         .sort((a: PriceLevel, b: PriceLevel) => a.price.minus(b.price).toNumber());
 
       const book: OrderBook = {
         tokenId,
         bids,
         asks,
-        timestamp: event.timestamp || Date.now(),
+        timestamp: Number(event.timestamp) || Date.now(),
       };
 
       this.onUpdate(tokenId, book);
     }
   }
 
+  /** Initial subscription: send all tokens at once */
+  private sendInitialSubscription(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const ids = [...this.subscribedTokens];
+    console.log(`[WsFeed] Subscribing to ${ids.length} tokens`);
+    this.ws.send(JSON.stringify({
+      type: "market",
+      assets_ids: ids,
+    }));
+  }
+
+  /** Dynamic subscribe (add tokens to existing connection) */
   private sendSubscribe(tokenIds: string[]): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    console.log(`[WsFeed] Subscribe +${tokenIds.length} tokens`);
+    this.ws.send(JSON.stringify({
+      assets_ids: tokenIds,
+      operation: "subscribe",
+    }));
+  }
 
-    for (const id of tokenIds) {
-      this.ws.send(JSON.stringify({
-        type: "market",
-        assets_id: id,
-      }));
+  /** Dynamic unsubscribe */
+  private sendUnsubscribe(tokenIds: string[]): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    console.log(`[WsFeed] Unsubscribe -${tokenIds.length} tokens`);
+    this.ws.send(JSON.stringify({
+      assets_ids: tokenIds,
+      operation: "unsubscribe",
+    }));
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send("PING");
+      }
+    }, HEARTBEAT_INTERVAL);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
     }
   }
 
-  private sendUnsubscribe(tokenIds: string[]): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-
-    for (const id of tokenIds) {
-      this.ws.send(JSON.stringify({
-        type: "market",
-        assets_id: id,
-        action: "unsubscribe",
-      }));
+  private clearTimers(): void {
+    this.stopHeartbeat();
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.staleTimer) {
+      clearTimeout(this.staleTimer);
+      this.staleTimer = null;
     }
   }
 
@@ -190,13 +229,14 @@ export class ClobWsFeed {
     if (!this.running) return;
 
     this.staleTimer = setTimeout(() => {
-      console.warn("[WsFeed] Stale: no data for 60s, forcing reconnect");
+      console.warn("[WsFeed] Stale: no data for 30s, forcing reconnect");
       this.connected = false;
+      this.stopHeartbeat();
       if (this.ws) {
         this.ws.close();
         this.ws = null;
       }
       this.scheduleReconnect();
-    }, this.staleTimeoutMs);
+    }, STALE_TIMEOUT);
   }
 }

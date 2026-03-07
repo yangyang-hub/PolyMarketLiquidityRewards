@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useAppStore } from "@/stores/appStore";
 import { useApi } from "@/hooks/useApi";
-import type { AccountConfigDto, AccountState } from "@/types";
+import type { AccountConfigDto, AccountState, StrategyOverride } from "@/types";
 import StatusBadge from "@/components/StatusBadge";
 import OrderTable from "@/components/OrderTable";
+import OverrideEditor from "@/components/OverrideEditor";
 
 // --- Types ---
 
@@ -19,7 +20,7 @@ interface AccountForm {
 const emptyForm: AccountForm = {
   name: "",
   privateKey: "",
-  signatureType: 2,
+  signatureType: 1,
   proxyWallet: "",
 };
 
@@ -36,7 +37,7 @@ const SIG_TYPE_DESCRIPTIONS: Record<number, string> = {
 };
 
 const NAME_RE = /^[a-zA-Z0-9_\-]{1,64}$/;
-const HEX_KEY_RE = /^0x[0-9a-fA-F]{64}$/;
+const HEX_KEY_RE = /^(0x)?[0-9a-fA-F]{64}$/;
 const ETH_ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
 
 interface FieldErrors {
@@ -64,10 +65,8 @@ function validateForm(
   if (!editing && !pk) {
     errors.privateKey = "请输入私钥";
   } else if (pk) {
-    if (!pk.startsWith("0x")) {
-      errors.privateKey = "私钥需以 0x 开头";
-    } else if (!HEX_KEY_RE.test(pk)) {
-      errors.privateKey = "私钥格式不正确，需要 0x + 64 位十六进制字符";
+    if (!HEX_KEY_RE.test(pk)) {
+      errors.privateKey = "私钥格式不正确，需要 64 位十六进制字符（可选 0x 前缀）";
     }
   }
 
@@ -144,21 +143,31 @@ function AccountCardItem({
   name,
   account,
   cfg,
+  override,
+  globalConfig,
+  savingOverride,
   onEdit,
   onDelete,
   onStart,
   onStop,
+  onSaveOverride,
 }: {
   name: string;
   account?: AccountState;
   cfg?: AccountConfigDto;
+  override: StrategyOverride;
+  globalConfig: ReturnType<typeof useAppStore.getState>["config"];
+  savingOverride: boolean;
   onEdit: () => void;
   onDelete: () => void;
   onStart: () => void;
   onStop: () => void;
+  onSaveOverride: (o: StrategyOverride) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [showOverrides, setShowOverrides] = useState(false);
   const hasOrders = account && account.activeOrders.length > 0;
+  const overrideCount = Object.keys(override).length;
 
   return (
     <div className="card bg-base-100 shadow-sm border border-base-300 transition-shadow hover:shadow-md">
@@ -301,6 +310,36 @@ function AccountCardItem({
             )}
           </div>
         )}
+
+        {/* Strategy Override */}
+        <div className="px-4 pb-3">
+          <button
+            className="btn btn-ghost btn-xs gap-1 -ml-1"
+            onClick={() => setShowOverrides(!showOverrides)}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className={`h-3 w-3 transition-transform ${showOverrides ? "rotate-90" : ""}`}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+            策略覆盖
+            {overrideCount > 0 && (
+              <span className="badge badge-primary badge-xs">{overrideCount}</span>
+            )}
+          </button>
+          {showOverrides && (
+            <div className="mt-2">
+              <OverrideEditor
+                value={override}
+                globalConfig={globalConfig}
+                onSave={onSaveOverride}
+                saving={savingOverride}
+              />
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -311,6 +350,8 @@ function AccountCardItem({
 export default function AccountsPage() {
   const accounts = useAppStore((s) => s.accounts);
   const accountConfigs = useAppStore((s) => s.accountConfigs);
+  const accountOverrides = useAppStore((s) => s.accountOverrides);
+  const config = useAppStore((s) => s.config);
   const setAccountConfigs = useAppStore((s) => s.setAccountConfigs);
   const { get, post, put, del } = useApi();
 
@@ -322,6 +363,7 @@ export default function AccountsPage() {
   const [loading, setLoading] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const [savingOverride, setSavingOverride] = useState(false);
 
   const modalRef = useRef<HTMLDialogElement>(null);
   const deleteModalRef = useRef<HTMLDialogElement>(null);
@@ -422,6 +464,17 @@ export default function AccountsPage() {
   const getConfigForAccount = (name: string) =>
     accountConfigs.find((c) => c.name === name);
 
+  const handleSaveOverride = async (accountName: string, override: StrategyOverride) => {
+    setSavingOverride(true);
+    try {
+      await put(`/api/accounts/${encodeURIComponent(accountName)}/overrides`, { overrides: override });
+    } catch (e: any) {
+      console.error("Save override failed:", e.message);
+    } finally {
+      setSavingOverride(false);
+    }
+  };
+
   // Merge account names from both sources, deduplicated, ordered
   const allNames = [
     ...new Set([
@@ -479,6 +532,9 @@ export default function AccountsPage() {
                 name={name}
                 account={account}
                 cfg={cfg}
+                override={accountOverrides[name] || {}}
+                globalConfig={config}
+                savingOverride={savingOverride}
                 onEdit={() => cfg && openEditModal(cfg)}
                 onDelete={() => {
                   setDeleteTarget(name);
@@ -487,6 +543,7 @@ export default function AccountsPage() {
                 }}
                 onStart={() => post(`/api/accounts/${encodeURIComponent(name)}/start`)}
                 onStop={() => post(`/api/accounts/${encodeURIComponent(name)}/stop`)}
+                onSaveOverride={(o) => handleSaveOverride(name, o)}
               />
             );
           })}
@@ -734,9 +791,7 @@ export default function AccountsPage() {
             </div>
           </form>
         </div>
-        <form method="dialog" className="modal-backdrop">
-          <button>close</button>
-        </form>
+        <div className="modal-backdrop" />
       </dialog>
 
       {/* ── Delete Confirmation Modal ── */}

@@ -3,10 +3,10 @@ import Decimal from "decimal.js";
 import type {
   AccountConfig,
   AccountState,
-  ClobRewardData,
+  ManagedMarket,
   OrderBook,
-  RewardMarketCandidate,
   StrategyConfig,
+  StrategyOverride,
   WsMessage,
 } from "../types";
 import {
@@ -16,11 +16,11 @@ import {
   dbUpdateAccount,
   dbDeleteAccount,
   dbGetAccountConfig,
+  dbUpdateMarketRewards,
 } from "../db/database";
 import { ClobWsFeed } from "../clob/ws-feed";
 import { ClobExecutor } from "../clob/executor";
-import { fetchAllActiveMarkets } from "../gamma/api";
-import { selectRewardMarkets } from "../strategy/market-selector";
+import { fetchMarketByConditionId, fetchMarketBySlug } from "../gamma/api";
 import { store } from "../store/memory-store";
 import { AccountEngine } from "./engine";
 import { ethers } from "ethers";
@@ -32,7 +32,8 @@ class EngineManager {
   private accountConfigs: AccountConfig[] = [];
   private wsFeed: ClobWsFeed;
   private wsClients: Set<WebSocket> = new Set();
-  private marketRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private rewardRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  private balanceRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private initialized = false;
 
   constructor() {
@@ -71,22 +72,49 @@ class EngineManager {
         (name, state) => this.broadcast({ type: "account_state", name, state }),
       );
       this.engines.set(acc.name, engine);
+
+      // Fetch balance in background
+      const executor = new ClobExecutor(acc);
+      executor.initApiKeys().then(async () => {
+        const balance = await executor.getCollateralBalance();
+        console.log(`[Manager] ${acc.name} balance: $${balance}`);
+        store.updateAccount(acc.name, { balance });
+        this.broadcast({ type: "account_state", name: acc.name, state: store.accounts.get(acc.name)! });
+      }).catch((e: any) => {
+        console.error(`[Manager] Failed to fetch balance for ${acc.name}:`, e.message);
+      });
     }
 
     // Start WS feed
     this.wsFeed.start();
 
-    // Initial market refresh
-    await this.refreshMarkets();
+    // Subscribe to existing managed markets' tokens
+    const tokenIds: string[] = [];
+    for (const m of store.managedMarkets) {
+      for (const t of m.tokens) {
+        tokenIds.push(t.token_id);
+      }
+    }
+    if (tokenIds.length > 0) {
+      this.wsFeed.subscribe(tokenIds);
+      // Fetch initial orderbooks
+      await this.fetchOrderbooks(tokenIds);
+    }
 
-    // Periodic market refresh (every 30 minutes)
-    this.marketRefreshTimer = setInterval(
-      () => this.refreshMarkets(),
+    // Periodic reward refresh (every 30 minutes)
+    this.rewardRefreshTimer = setInterval(
+      () => this.refreshMarketRewards(),
       30 * 60 * 1000,
     );
 
+    // Periodic balance refresh for all accounts (every 60 seconds)
+    this.balanceRefreshTimer = setInterval(
+      () => this.refreshAllBalances(),
+      60 * 1000,
+    );
+
     this.initialized = true;
-    console.log(`[Manager] Initialized with ${this.accountConfigs.length} accounts`);
+    console.log(`[Manager] Initialized with ${this.accountConfigs.length} accounts, ${store.managedMarkets.length} markets`);
     this.broadcastSystemStatus();
   }
 
@@ -125,6 +153,17 @@ class EngineManager {
     // Update store
     store.updateAccount(name, { status: "idle", address: wallet.address });
 
+    // Fetch balance in background (don't block account creation)
+    const executor = new ClobExecutor(acc);
+    executor.initApiKeys().then(async () => {
+      const balance = await executor.getCollateralBalance();
+      console.log(`[Manager] ${name} balance: $${balance}`);
+      store.updateAccount(name, { balance });
+      this.broadcast({ type: "account_state", name, state: store.accounts.get(name)! });
+    }).catch((e: any) => {
+      console.error(`[Manager] Failed to fetch balance for ${name}:`, e.message);
+    });
+
     // Broadcast
     this.broadcast({ type: "account_state", name, state: store.accounts.get(name)! });
     this.broadcast({ type: "account_configs", configs: dbGetAllAccountMetas() });
@@ -140,23 +179,18 @@ class EngineManager {
     const engine = this.engines.get(name);
     if (!engine) throw new Error(`Account "${name}" not found`);
 
-    // Update DB first (throws on missing row or disk error — before we touch the engine)
     dbUpdateAccount(name, privateKey, signatureType, proxyWallet);
 
-    // Reload config from DB
     const newConfig = dbGetAccountConfig(name);
     if (!newConfig) throw new Error(`Account "${name}" not found in DB after update`);
 
-    // Stop engine only after DB write succeeded
     if (engine.isRunning()) {
       await engine.stop();
     }
 
-    // Update in-memory configs
     const idx = this.accountConfigs.findIndex((a) => a.name === name);
     if (idx >= 0) this.accountConfigs[idx] = newConfig;
 
-    // Recreate engine with new config
     const newEngine = new AccountEngine(
       newConfig,
       (event) => this.broadcast({ type: "order_event", event }),
@@ -164,11 +198,9 @@ class EngineManager {
     );
     this.engines.set(name, newEngine);
 
-    // Update store address
     const wallet = new ethers.Wallet(newConfig.privateKey);
     store.updateAccount(name, { status: "idle", address: wallet.address });
 
-    // Broadcast
     this.broadcast({ type: "account_state", name, state: store.accounts.get(name)! });
     this.broadcast({ type: "account_configs", configs: dbGetAllAccountMetas() });
   }
@@ -177,110 +209,186 @@ class EngineManager {
     const engine = this.engines.get(name);
     if (!engine) throw new Error(`Account "${name}" not found`);
 
-    // Delete from DB first (throws on disk error — before we touch in-memory state)
     dbDeleteAccount(name);
 
-    // Stop engine after DB delete succeeded
     if (engine.isRunning()) {
       await engine.stop();
     }
 
-    // Remove from in-memory
     this.engines.delete(name);
     this.accountConfigs = this.accountConfigs.filter((a) => a.name !== name);
     store.accounts.delete(name);
 
-    // Broadcast
     this.broadcast({ type: "account_configs", configs: dbGetAllAccountMetas() });
     this.broadcastSystemStatus();
   }
 
-  async refreshMarkets(): Promise<void> {
+  // --- Market Management ---
+
+  async addMarket(input: string): Promise<ManagedMarket> {
+    const isSlug = input.includes("-") && !/^0x[0-9a-fA-F]+$/.test(input);
+
+    let marketInfo;
+    if (isSlug) {
+      marketInfo = await fetchMarketBySlug(input);
+    } else {
+      marketInfo = await fetchMarketByConditionId(input);
+    }
+    if (!marketInfo) throw new Error(`Market not found: ${input}`);
+
+    // Check if already managed
+    if (store.managedMarkets.some((m) => m.conditionId === marketInfo!.condition_id)) {
+      throw new Error(`Market already managed: ${marketInfo.condition_id}`);
+    }
+
+    // Fetch CLOB rewards for this market
+    let rewardsMaxSpread = 0;
+    let rewardsMinSize = 0;
+    let dailyRate = 0;
+
+    const firstAcc = this.accountConfigs[0];
+    if (firstAcc) {
+      try {
+        const executor = new ClobExecutor(firstAcc);
+        await executor.initApiKeys();
+        const rawRewards = await executor.getCurrentRewards();
+        const match = rawRewards.find((r: any) => r.condition_id === marketInfo!.condition_id);
+        if (match) {
+          rewardsMaxSpread = match.rewards_max_spread || 0;
+          rewardsMinSize = match.rewards_min_size || 0;
+          dailyRate = (match.rewards_config || []).reduce(
+            (sum: number, c: any) => sum + (c.rate_per_day || 0),
+            0,
+          );
+        }
+      } catch (e: any) {
+        console.error("[Manager] Failed to get CLOB rewards for market:", e.message);
+      }
+    }
+
+    const managed: ManagedMarket = {
+      conditionId: marketInfo.condition_id,
+      slug: marketInfo.slug,
+      question: marketInfo.question,
+      tokens: marketInfo.tokens,
+      negRisk: marketInfo.neg_risk,
+      active: marketInfo.active,
+      rewardsMaxSpread,
+      rewardsMinSize,
+      dailyRate,
+      liquidity: marketInfo.liquidity,
+      addedAt: Math.floor(Date.now() / 1000),
+    };
+
+    store.addMarket(managed);
+
+    // Subscribe to WS feed for token IDs
+    const tokenIds = managed.tokens.map((t) => t.token_id);
+    this.wsFeed.subscribe(tokenIds);
+    await this.fetchOrderbooks(tokenIds);
+
+    this.broadcast({ type: "market_added", market: managed });
+    this.broadcastSystemStatus();
+
+    return managed;
+  }
+
+  removeMarket(conditionId: string): void {
+    const market = store.managedMarkets.find((m) => m.conditionId === conditionId);
+    if (!market) throw new Error(`Market not found: ${conditionId}`);
+
+    // Unsubscribe from WS feed and clean orderbook cache
+    const tokenIds = market.tokens.map((t) => t.token_id);
+    this.wsFeed.unsubscribe(tokenIds);
+    for (const id of tokenIds) {
+      store.orderbooks.delete(id);
+    }
+
+    store.removeMarket(conditionId);
+    this.broadcast({ type: "market_removed", conditionId });
+    this.broadcastSystemStatus();
+  }
+
+  // --- Override Management ---
+
+  setAccountOverride(accountName: string, override: StrategyOverride): void {
+    store.setAccountOverride(accountName, override);
+    this.broadcast({
+      type: "overrides_update",
+      accountOverrides: store.accountOverrides,
+      marketOverrides: store.marketOverrides,
+    });
+  }
+
+  setMarketOverride(conditionId: string, override: StrategyOverride): void {
+    store.setMarketOverride(conditionId, override);
+    this.broadcast({
+      type: "overrides_update",
+      accountOverrides: store.accountOverrides,
+      marketOverrides: store.marketOverrides,
+    });
+  }
+
+  // --- Reward Refresh ---
+
+  async refreshMarketRewards(): Promise<void> {
+    const firstAcc = this.accountConfigs[0];
+    if (!firstAcc || store.managedMarkets.length === 0) return;
+
     try {
-      console.log("[Manager] Refreshing reward markets...");
+      console.log("[Manager] Refreshing market rewards...");
+      const executor = new ClobExecutor(firstAcc);
+      await executor.initApiKeys();
+      const rawRewards = await executor.getCurrentRewards();
 
-      // Get CLOB rewards from one executor (any account)
-      let clobRewards: ClobRewardData[] = [];
+      const rewardsMap = new Map<string, any>();
+      for (const r of rawRewards) {
+        rewardsMap.set(r.condition_id, r);
+      }
 
-      // Fetch from first available account or create temp executor
-      const firstAcc = this.accountConfigs[0];
-      if (firstAcc) {
-        const executor = new ClobExecutor(firstAcc);
-        try {
-          await executor.initApiKeys();
-          const rawRewards = await executor.getCurrentRewards();
-          clobRewards = rawRewards.map((r: any) => ({
-            conditionId: r.condition_id,
-            rewardsMaxSpread: new Decimal(r.rewards_max_spread || 0),
-            rewardsMinSize: new Decimal(r.rewards_min_size || 0),
-            totalDailyRate: new Decimal(
-              (r.rewards_config || []).reduce(
-                (sum: number, c: any) => sum + (c.rate_per_day || 0),
-                0,
-              ),
-            ),
-          }));
-        } catch (e: any) {
-          console.error("[Manager] Failed to get CLOB rewards:", e.message);
+      for (const market of store.managedMarkets) {
+        const match = rewardsMap.get(market.conditionId);
+        if (match) {
+          const maxSpread = match.rewards_max_spread || 0;
+          const minSize = match.rewards_min_size || 0;
+          const rate = (match.rewards_config || []).reduce(
+            (sum: number, c: any) => sum + (c.rate_per_day || 0),
+            0,
+          );
+          dbUpdateMarketRewards(market.conditionId, maxSpread, minSize, rate, market.liquidity);
+          market.rewardsMaxSpread = maxSpread;
+          market.rewardsMinSize = minSize;
+          market.dailyRate = rate;
         }
       }
 
-      // Fetch Gamma markets
-      const gammaMarkets = await fetchAllActiveMarkets();
-
-      // Select best markets
-      const candidates = selectRewardMarkets(gammaMarkets, clobRewards, store.config);
-      store.rewardMarkets = candidates;
-
-      // Subscribe to orderbooks for selected market tokens
-      const tokenIds: string[] = [];
-      for (const c of candidates) {
-        for (const t of c.market.tokens) {
-          tokenIds.push(t.token_id);
-        }
-      }
-      this.wsFeed.subscribe(tokenIds);
-
-      // Also fetch initial orderbooks via REST
-      if (firstAcc) {
-        const executor = new ClobExecutor(firstAcc);
-        try {
-          await executor.initApiKeys();
-          for (const tokenId of tokenIds) {
-            const raw = await executor.getOrderBook(tokenId);
-            if (raw) {
-              const book: OrderBook = {
-                tokenId,
-                bids: (raw.bids || []).map((b: any) => ({
-                  price: new Decimal(b.price),
-                  size: new Decimal(b.size),
-                })),
-                asks: (raw.asks || []).map((a: any) => ({
-                  price: new Decimal(a.price),
-                  size: new Decimal(a.size),
-                })),
-                timestamp: Date.now(),
-              };
-              book.bids.sort((a, b) => b.price.minus(a.price).toNumber());
-              book.asks.sort((a, b) => a.price.minus(b.price).toNumber());
-              store.updateOrderBook(tokenId, book);
-            }
-          }
-        } catch (e: any) {
-          console.error("[Manager] Failed to fetch orderbooks:", e.message);
-        }
-      }
-
-      console.log(`[Manager] Selected ${candidates.length} reward markets`);
-      this.broadcast({
-        type: "reward_markets",
-        markets: candidates as any,
-        enabledIds: Array.from(store.enabledMarketIds),
-      });
+      this.broadcast({ type: "managed_markets", markets: store.managedMarkets });
+      console.log("[Manager] Market rewards refreshed");
     } catch (e: any) {
-      console.error("[Manager] Market refresh failed:", e.message);
+      console.error("[Manager] Reward refresh failed:", e.message);
     }
   }
+
+  // --- Balance Refresh ---
+
+  private async refreshAllBalances(): Promise<void> {
+    for (const acc of this.accountConfigs) {
+      try {
+        const executor = new ClobExecutor(acc);
+        await executor.initApiKeys();
+        const balance = await executor.getCollateralBalance();
+        const prev = store.accounts.get(acc.name);
+        if (prev && prev.balance !== balance) {
+          store.updateAccount(acc.name, { balance });
+          this.broadcast({ type: "account_state", name: acc.name, state: store.accounts.get(acc.name)! });
+        }
+      } catch {
+        // skip this account
+      }
+    }
+  }
+
+  // --- Engine Control ---
 
   async startAccount(name: string): Promise<boolean> {
     const engine = this.engines.get(name);
@@ -314,33 +422,8 @@ class EngineManager {
     return store.getAccountStates();
   }
 
-  getRewardMarkets(): RewardMarketCandidate[] {
-    return store.rewardMarkets;
-  }
-
-  toggleMarket(conditionId: string): boolean {
-    const enabled = !store.isMarketEnabled(conditionId);
-    if (enabled) {
-      store.enableMarket(conditionId);
-
-      // Subscribe to WS for this market's tokens
-      const candidate = store.rewardMarkets.find(
-        (c) => c.market.condition_id === conditionId,
-      );
-      if (candidate) {
-        const tokenIds = candidate.market.tokens.map((t) => t.token_id);
-        this.wsFeed.subscribe(tokenIds);
-      }
-    } else {
-      store.disableMarket(conditionId);
-    }
-
-    this.broadcast({ type: "market_toggle", conditionId, enabled });
-    return enabled;
-  }
-
-  getEnabledMarketIds(): string[] {
-    return Array.from(store.enabledMarketIds);
+  getManagedMarkets(): ManagedMarket[] {
+    return store.managedMarkets;
   }
 
   getConfig(): StrategyConfig {
@@ -357,8 +440,6 @@ class EngineManager {
   addClient(ws: WebSocket): void {
     this.wsClients.add(ws);
     console.log(`[Manager] Browser connected (${this.wsClients.size} total)`);
-
-    // Send current state snapshot
     this.sendSnapshot(ws);
   }
 
@@ -369,7 +450,6 @@ class EngineManager {
 
   broadcast(message: WsMessage): void {
     const data = JSON.stringify(message, (_key, value) => {
-      // Serialize Decimal objects to numbers
       if (value instanceof Decimal) return value.toNumber();
       return value;
     });
@@ -386,7 +466,7 @@ class EngineManager {
       type: "system_status",
       wsConnected: this.wsFeed.connected,
       totalAccounts: this.engines.size,
-      totalMarkets: store.rewardMarkets.length,
+      totalMarkets: store.managedMarkets.length,
     });
   }
 
@@ -405,7 +485,7 @@ class EngineManager {
       type: "system_status",
       wsConnected: this.wsFeed.connected,
       totalAccounts: this.engines.size,
-      totalMarkets: store.rewardMarkets.length,
+      totalMarkets: store.managedMarkets.length,
     });
 
     // All account states
@@ -416,8 +496,15 @@ class EngineManager {
     // Account configs (without private keys)
     send({ type: "account_configs", configs: dbGetAllAccountMetas() });
 
-    // Reward markets (with enabled status)
-    send({ type: "reward_markets", markets: store.rewardMarkets as any, enabledIds: Array.from(store.enabledMarketIds) });
+    // Managed markets
+    send({ type: "managed_markets", markets: store.managedMarkets });
+
+    // Overrides
+    send({
+      type: "overrides_update",
+      accountOverrides: store.accountOverrides,
+      marketOverrides: store.marketOverrides,
+    });
 
     // Config
     send({ type: "config_update", config: store.config });
@@ -433,7 +520,54 @@ class EngineManager {
       });
     }
   }
+
+  private async fetchOrderbooks(tokenIds: string[]): Promise<void> {
+    const firstAcc = this.accountConfigs[0];
+    if (!firstAcc) return;
+
+    try {
+      // getOrderBook is a public API — no initApiKeys needed
+      const executor = new ClobExecutor(firstAcc);
+      for (const tokenId of tokenIds) {
+        try {
+          const raw = await executor.getOrderBook(tokenId);
+          if (raw) {
+            const book: OrderBook = {
+              tokenId,
+              bids: (raw.bids || []).map((b: any) => ({
+                price: new Decimal(b.price),
+                size: new Decimal(b.size),
+              })),
+              asks: (raw.asks || []).map((a: any) => ({
+                price: new Decimal(a.price),
+                size: new Decimal(a.size),
+              })),
+              timestamp: Date.now(),
+            };
+            book.bids.sort((a, b) => b.price.minus(a.price).toNumber());
+            book.asks.sort((a, b) => a.price.minus(b.price).toNumber());
+            store.updateOrderBook(tokenId, book);
+
+            // Broadcast to connected browsers immediately
+            this.broadcast({
+              type: "orderbook_update",
+              tokenId,
+              bids: book.bids.map((b) => ({ price: b.price.toNumber(), size: b.size.toNumber() })),
+              asks: book.asks.map((a) => ({ price: a.price.toNumber(), size: a.size.toNumber() })),
+              timestamp: book.timestamp,
+            });
+            console.log(`[Manager] Fetched orderbook for ${tokenId.slice(0, 8)}... (${book.bids.length} bids, ${book.asks.length} asks)`);
+          }
+        } catch (e: any) {
+          console.error(`[Manager] Failed to fetch orderbook for ${tokenId.slice(0, 8)}...:`, e.message);
+        }
+      }
+    } catch (e: any) {
+      console.error("[Manager] Failed to fetch orderbooks:", e.message);
+    }
+  }
 }
 
-// Singleton
-export const engineManager = new EngineManager();
+// Singleton — shared via globalThis so Next.js API routes and custom server use the same instance
+const g = globalThis as typeof globalThis & { __engineManager?: EngineManager };
+export const engineManager = (g.__engineManager ??= new EngineManager());

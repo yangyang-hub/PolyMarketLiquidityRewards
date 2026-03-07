@@ -1,8 +1,6 @@
 import { getGammaHost } from "../config";
 import type { MarketInfo } from "../types";
 
-const GAMMA_MARKETS_ENDPOINT = "/markets";
-
 interface GammaMarketResp {
   condition_id: string;
   question_id: string;
@@ -23,17 +21,8 @@ interface GammaMarketResp {
   liquidity: number;
 }
 
-export async function fetchGammaMarkets(limit = 100, offset = 0): Promise<MarketInfo[]> {
-  const host = getGammaHost();
-  const url = `${host}${GAMMA_MARKETS_ENDPOINT}?limit=${limit}&offset=${offset}&active=true&closed=false`;
-
-  const resp = await fetch(url);
-  if (!resp.ok) {
-    throw new Error(`Gamma API error: ${resp.status} ${resp.statusText}`);
-  }
-
-  const data: GammaMarketResp[] = await resp.json();
-  return data.map((m) => ({
+function mapToMarketInfo(m: GammaMarketResp): MarketInfo {
+  return {
     condition_id: m.condition_id,
     question_id: m.question_id,
     slug: m.slug,
@@ -44,20 +33,25 @@ export async function fetchGammaMarkets(limit = 100, offset = 0): Promise<Market
     tokens: m.tokens || [],
     rewards: m.rewards,
     liquidity: m.liquidity || 0,
-  }));
+  };
 }
 
-export async function fetchAllActiveMarkets(): Promise<MarketInfo[]> {
-  const allMarkets: MarketInfo[] = [];
-  let offset = 0;
-  const limit = 100;
+export async function fetchMarketByConditionId(conditionId: string): Promise<MarketInfo | null> {
+  const host = getGammaHost();
+  const url = `${host}/markets?condition_id=${conditionId}`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Gamma API error: ${resp.status}`);
+  const data: GammaMarketResp[] = await resp.json();
+  if (data.length === 0) return null;
+  return mapToMarketInfo(data[0]);
+}
 
-  while (true) {
-    const batch = await fetchGammaMarkets(limit, offset);
-    allMarkets.push(...batch);
-    if (batch.length < limit) break;
-    offset += limit;
-  }
-
-  return allMarkets;
+export async function fetchMarketBySlug(slug: string): Promise<MarketInfo | null> {
+  const host = getGammaHost();
+  const url = `${host}/markets?slug=${slug}`;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`Gamma API error: ${resp.status}`);
+  const data: GammaMarketResp[] = await resp.json();
+  if (data.length === 0) return null;
+  return mapToMarketInfo(data[0]);
 }

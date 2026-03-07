@@ -61,11 +61,27 @@ export function minCostAdjustedSize(price: Decimal): Decimal {
 
 export class ClobExecutor {
   private client: ClobClient;
+  private signatureType: number;
+  private funderAddress?: string;
   public accountName: string;
 
   constructor(account: AccountConfig) {
     this.client = createClobClient(account);
     this.accountName = account.name;
+    this.signatureType = account.signatureType;
+    this.funderAddress = account.proxyWallet;
+    console.log(`[${this.accountName}] ClobExecutor created: signatureType=${this.signatureType}, funderAddress=${this.funderAddress || 'none'}`);
+  }
+
+  private rebuildClient(creds: any): void {
+    this.client = new ClobClient(
+      this.client.host,
+      this.client.chainId,
+      this.client.signer,
+      creds,
+      this.signatureType,
+      this.funderAddress,
+    );
   }
 
   async initApiKeys(): Promise<void> {
@@ -73,30 +89,18 @@ export class ClobExecutor {
       const resp = await this.client.getApiKeys();
       if (!resp?.apiKeys || resp.apiKeys.length === 0) {
         const creds = await this.client.createApiKey();
-        // Reconstruct client with creds
-        this.client = new ClobClient(
-          this.client.host,
-          this.client.chainId,
-          this.client.signer,
-          creds,
-        );
+        console.log(`[${this.accountName}] API key created`);
+        this.rebuildClient(creds);
       } else {
         const creds = await this.client.deriveApiKey();
-        this.client = new ClobClient(
-          this.client.host,
-          this.client.chainId,
-          this.client.signer,
-          creds,
-        );
+        console.log(`[${this.accountName}] API key derived (${resp.apiKeys.length} keys exist)`);
+        this.rebuildClient(creds);
       }
-    } catch {
+    } catch (e: any) {
+      console.warn(`[${this.accountName}] initApiKeys primary path failed: ${e.message}, trying createOrDerive...`);
       const creds = await this.client.createOrDeriveApiKey();
-      this.client = new ClobClient(
-        this.client.host,
-        this.client.chainId,
-        this.client.signer,
-        creds,
-      );
+      console.log(`[${this.accountName}] API key createOrDerive succeeded`);
+      this.rebuildClient(creds);
     }
   }
 
@@ -223,6 +227,21 @@ export class ClobExecutor {
       return (await this.client.getCurrentRewards()) || [];
     } catch {
       return [];
+    }
+  }
+
+  async getCollateralBalance(): Promise<number> {
+    try {
+      const resp = await this.client.getBalanceAllowance({
+        asset_type: "COLLATERAL" as any,
+      });
+      const raw = parseFloat(resp?.balance || "0");
+      const balance = raw / 1e6;
+      console.log(`[${this.accountName}] balance raw=${raw}, USDC=${balance}`);
+      return balance;
+    } catch (e: any) {
+      console.error(`[${this.accountName}] getBalance failed:`, e.message);
+      return 0;
     }
   }
 

@@ -1,16 +1,21 @@
 import type {
   StrategyConfig,
+  StrategyOverride,
+  ManagedMarket,
   AccountState,
   OrderBook,
-  RewardMarketCandidate,
   OrderEvent,
 } from "../types";
 import {
   dbLoadStrategyConfig,
-  dbGetEnabledMarketIds,
-  dbEnableMarket,
-  dbDisableMarket,
   dbSaveStrategyConfig,
+  dbGetAllMarkets,
+  dbGetAllAccountOverrides,
+  dbGetAllMarketOverrides,
+  dbAddMarket,
+  dbRemoveMarket,
+  dbSetAccountOverride,
+  dbSetMarketOverride,
 } from "../db/database";
 
 const MAX_EVENT_LOG = 200;
@@ -18,14 +23,17 @@ const MAX_EVENT_LOG = 200;
 class MemoryStore {
   config: StrategyConfig;
   accounts: Map<string, AccountState> = new Map();
-  orderbooks: Map<string, OrderBook> = new Map(); // tokenId → OrderBook
-  rewardMarkets: RewardMarketCandidate[] = [];
+  orderbooks: Map<string, OrderBook> = new Map(); // tokenId -> OrderBook
+  managedMarkets: ManagedMarket[] = [];
+  accountOverrides: Record<string, StrategyOverride> = {};
+  marketOverrides: Record<string, StrategyOverride> = {};
   eventLog: OrderEvent[] = [];
-  enabledMarketIds: Set<string> = new Set(); // conditionId
 
   constructor() {
     this.config = dbLoadStrategyConfig();
-    this.enabledMarketIds = new Set(dbGetEnabledMarketIds());
+    this.managedMarkets = dbGetAllMarkets();
+    this.accountOverrides = dbGetAllAccountOverrides();
+    this.marketOverrides = dbGetAllMarketOverrides();
   }
 
   updateConfig(partial: Partial<StrategyConfig>): void {
@@ -62,18 +70,30 @@ class MemoryStore {
     }
   }
 
-  enableMarket(conditionId: string): void {
-    this.enabledMarketIds.add(conditionId);
-    dbEnableMarket(conditionId);
+  // --- Managed Markets ---
+
+  addMarket(market: ManagedMarket): void {
+    dbAddMarket(market);
+    this.managedMarkets.push(market);
   }
 
-  disableMarket(conditionId: string): void {
-    this.enabledMarketIds.delete(conditionId);
-    dbDisableMarket(conditionId);
+  removeMarket(conditionId: string): void {
+    dbRemoveMarket(conditionId);
+    this.managedMarkets = this.managedMarkets.filter(
+      (m) => m.conditionId !== conditionId,
+    );
   }
 
-  isMarketEnabled(conditionId: string): boolean {
-    return this.enabledMarketIds.has(conditionId);
+  // --- Overrides ---
+
+  setAccountOverride(accountName: string, override: StrategyOverride): void {
+    dbSetAccountOverride(accountName, override);
+    this.accountOverrides[accountName] = override;
+  }
+
+  setMarketOverride(conditionId: string, override: StrategyOverride): void {
+    dbSetMarketOverride(conditionId, override);
+    this.marketOverrides[conditionId] = override;
   }
 
   getAccountStates(): AccountState[] {
@@ -81,4 +101,5 @@ class MemoryStore {
   }
 }
 
-export const store = new MemoryStore();
+const g = globalThis as typeof globalThis & { __memoryStore?: MemoryStore };
+export const store = (g.__memoryStore ??= new MemoryStore());

@@ -4,7 +4,8 @@ import type {
   AccountConfigDto,
   OrderBookDto,
   StrategyConfig,
-  RewardMarketDto,
+  StrategyOverride,
+  ManagedMarketDto,
   OrderEvent,
   WsMessage,
 } from "@/types";
@@ -13,7 +14,9 @@ interface AppState {
   wsConnected: boolean;
   accounts: AccountState[];
   accountConfigs: AccountConfigDto[];
-  rewardMarkets: RewardMarketDto[];
+  managedMarkets: ManagedMarketDto[];
+  accountOverrides: Record<string, StrategyOverride>;
+  marketOverrides: Record<string, StrategyOverride>;
   selectedMarketTokenId: string | null;
   orderbooks: Record<string, OrderBookDto>;
   config: StrategyConfig | null;
@@ -30,7 +33,7 @@ interface AppState {
   setConfig: (config: StrategyConfig) => void;
   setAccounts: (accounts: AccountState[]) => void;
   setAccountConfigs: (configs: AccountConfigDto[]) => void;
-  setRewardMarkets: (markets: RewardMarketDto[]) => void;
+  setManagedMarkets: (markets: ManagedMarketDto[]) => void;
   setWsConnected: (connected: boolean) => void;
 }
 
@@ -38,7 +41,9 @@ export const useAppStore = create<AppState>((set) => ({
   wsConnected: false,
   accounts: [],
   accountConfigs: [],
-  rewardMarkets: [],
+  managedMarkets: [],
+  accountOverrides: {},
+  marketOverrides: {},
   selectedMarketTokenId: null,
   orderbooks: {},
   config: null,
@@ -88,23 +93,27 @@ export const useAppStore = create<AppState>((set) => ({
             },
           };
 
-        case "reward_markets": {
-          const enabledIds = new Set(msg.enabledIds || []);
+        case "managed_markets":
           return {
-            rewardMarkets: (msg.markets as any[]).map((m: any) => ({
-              ...m,
-              enabled: enabledIds.has(m.conditionId),
-            })),
+            managedMarkets: msg.markets,
           };
-        }
 
-        case "market_toggle":
+        case "market_added":
           return {
-            rewardMarkets: state.rewardMarkets.map((m) =>
-              m.conditionId === msg.conditionId
-                ? { ...m, enabled: msg.enabled }
-                : m,
+            managedMarkets: [...state.managedMarkets, msg.market],
+          };
+
+        case "market_removed":
+          return {
+            managedMarkets: state.managedMarkets.filter(
+              (m) => m.conditionId !== msg.conditionId,
             ),
+          };
+
+        case "overrides_update":
+          return {
+            accountOverrides: msg.accountOverrides,
+            marketOverrides: msg.marketOverrides,
           };
 
         case "config_update":
@@ -122,6 +131,6 @@ export const useAppStore = create<AppState>((set) => ({
   setConfig: (config) => set({ config }),
   setAccounts: (accounts) => set({ accounts }),
   setAccountConfigs: (configs) => set({ accountConfigs: configs }),
-  setRewardMarkets: (markets) => set({ rewardMarkets: markets }),
+  setManagedMarkets: (markets) => set({ managedMarkets: markets }),
   setWsConnected: (connected) => set({ wsConnected: connected }),
 }));

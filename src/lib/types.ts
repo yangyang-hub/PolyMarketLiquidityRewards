@@ -40,6 +40,32 @@ export interface StrategyConfig {
   quoteNo: boolean;
 }
 
+// Overridable strategy fields (field-level partial)
+export interface StrategyOverride {
+  orderDepthLevel?: number;
+  cancelDepthLevel?: number;
+  minOrderSize?: number;
+  maxPositionPerMarket?: number;
+  spreadFraction?: number;
+  quoteYes?: boolean;
+  quoteNo?: boolean;
+}
+
+// Manually managed market (persisted in DB)
+export interface ManagedMarket {
+  conditionId: string;
+  slug: string;
+  question: string;
+  tokens: MarketToken[];
+  negRisk: boolean;
+  active: boolean;
+  rewardsMaxSpread: number;
+  rewardsMinSize: number;
+  dailyRate: number;
+  liquidity: number;
+  addedAt: number;
+}
+
 // --- Account ---
 
 export interface AccountConfig {
@@ -111,14 +137,6 @@ export interface ClobRewardData {
   totalDailyRate: Decimal;
 }
 
-export interface RewardMarketCandidate {
-  market: MarketInfo;
-  density: Decimal;
-  clobRewardsMaxSpread: Decimal;
-  clobRewardsMinSize: Decimal;
-  dailyRate: Decimal;
-}
-
 export interface TokenQuote {
   bidPrice: Decimal;
   askPrice: Decimal;
@@ -167,18 +185,25 @@ export type WsMessage =
       totalMarkets: number;
     }
   | {
-      type: "reward_markets";
-      markets: RewardMarketCandidate[];
-      enabledIds?: string[];
+      type: "managed_markets";
+      markets: ManagedMarket[];
+    }
+  | {
+      type: "market_added";
+      market: ManagedMarket;
+    }
+  | {
+      type: "market_removed";
+      conditionId: string;
+    }
+  | {
+      type: "overrides_update";
+      accountOverrides: Record<string, StrategyOverride>;
+      marketOverrides: Record<string, StrategyOverride>;
     }
   | {
       type: "config_update";
       config: StrategyConfig;
-    }
-  | {
-      type: "market_toggle";
-      conditionId: string;
-      enabled: boolean;
     }
   | {
       type: "account_configs";
