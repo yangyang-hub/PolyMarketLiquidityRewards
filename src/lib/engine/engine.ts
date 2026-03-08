@@ -149,27 +149,10 @@ export class AccountEngine {
     // Track which orders were cancelled this tick
     const cancelledOrderIds = new Set<string>();
 
-    // Get account balance for sizing (same balance available for all tokens)
+    // Get account balance for sizing
     const accountState = store.accounts.get(this.account.name);
     const balance = new Decimal(accountState?.balance || 0);
-
-    // Count TOTAL quoted tokens across ALL markets to split balance evenly
-    let totalQuotedTokens = 0;
-    for (const market of markets) {
-      const cfg = resolveConfig(
-        store.config,
-        store.accountOverrides[this.account.name],
-        store.marketOverrides[market.conditionId],
-      );
-      for (let i = 0; i < market.tokens.length; i++) {
-        if (i === 0 && cfg.quoteYes) totalQuotedTokens++;
-        if (i !== 0 && cfg.quoteNo) totalQuotedTokens++;
-      }
-    }
-    const tokenBalance = totalQuotedTokens > 1
-      ? balance.dividedBy(totalQuotedTokens).toDecimalPlaces(2, Decimal.ROUND_DOWN)
-      : balance;
-    console.log(`[Engine:${this.account.name}] Balance: $${balance}, ${totalQuotedTokens} quoted tokens, $${tokenBalance}/token`);
+    console.log(`[Engine:${this.account.name}] Balance: $${balance}, ${markets.length} markets`);
 
     // Process each market
     for (const market of markets) {
@@ -182,6 +165,16 @@ export class AccountEngine {
 
       const rewardsMaxSpread = new Decimal(market.rewardsMaxSpread);
       const rewardsMinSize = new Decimal(market.rewardsMinSize);
+
+      // Only split when quoting BOTH Yes and No in this market
+      let quotedInMarket = 0;
+      for (let i = 0; i < market.tokens.length; i++) {
+        if (i === 0 && config.quoteYes) quotedInMarket++;
+        if (i !== 0 && config.quoteNo) quotedInMarket++;
+      }
+      const tokenBalance = quotedInMarket > 1
+        ? balance.dividedBy(quotedInMarket).toDecimalPlaces(2, Decimal.ROUND_DOWN)
+        : balance;
 
       for (const token of market.tokens) {
         const tokenId = token.token_id;
