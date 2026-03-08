@@ -6,52 +6,57 @@ import { useAppStore } from "@/stores/appStore";
 import { useApi } from "@/hooks/useApi";
 import OverrideEditor from "@/components/OverrideEditor";
 import OrderBookView from "@/components/OrderBookView";
-import type { ManagedMarketDto, StrategyOverride } from "@/types";
+import type { StrategyOverride } from "@/types";
 
 const EMPTY_OVERRIDE: StrategyOverride = {};
 
+// ============================================================
+// Page — only owns the add-market form & delete-confirm modal
+// ============================================================
+
 export default function MarketsPage() {
-  const managedMarkets = useAppStore((s) => s.managedMarkets);
-  const marketOverrides = useAppStore((s) => s.marketOverrides);
-  const config = useAppStore((s) => s.config);
-  const selectedTokenId = useAppStore((s) => s.selectedMarketTokenId);
-  const setSelectedMarketToken = useAppStore((s) => s.setSelectedMarketToken);
-  const setOrderbooks = useAppStore((s) => s.setOrderbooks);
-  const { post, put, del } = useApi();
+  // Minimal subscription: only the sorted conditionId list
+  const sortedIds = useAppStore(
+    useShallow((s) =>
+      [...s.managedMarkets]
+        .sort((a, b) => b.addedAt - a.addedAt)
+        .map((m) => m.conditionId),
+    ),
+  );
+  const marketCount = sortedIds.length;
+  const { post, del } = useApi();
 
   const [input, setInput] = useState("");
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-  const [savingOverride, setSavingOverride] = useState(false);
 
-  // Auto-select first token if nothing is selected
+  // Auto-select first token when markets appear
   useEffect(() => {
-    if (!selectedTokenId && managedMarkets.length > 0 && managedMarkets[0].tokens.length > 0) {
+    const { selectedMarketTokenId, managedMarkets, setSelectedMarketToken } = useAppStore.getState();
+    if (!selectedMarketTokenId && managedMarkets.length > 0 && managedMarkets[0].tokens.length > 0) {
       setSelectedMarketToken(managedMarkets[0].tokens[0].token_id);
     }
-  }, [selectedTokenId, managedMarkets, setSelectedMarketToken]);
+  }, [marketCount]);
 
   // Fetch orderbooks from REST API on mount as fallback for WS data
   useEffect(() => {
-    if (managedMarkets.length === 0) return;
-    // Check if we already have orderbook data via store snapshot (avoid subscribing)
-    const obs = useAppStore.getState().orderbooks;
-    const hasAnyBook = managedMarkets.some((m) =>
-      m.tokens.some((t) => obs[t.token_id]),
+    if (marketCount === 0) return;
+    const state = useAppStore.getState();
+    const hasAnyBook = state.managedMarkets.some((m) =>
+      m.tokens.some((t) => state.orderbooks[t.token_id]),
     );
     if (hasAnyBook) return;
-
     fetch("/api/markets/orderbooks")
       .then((res) => res.json())
       .then((data) => {
         if (data?.orderbooks && Object.keys(data.orderbooks).length > 0) {
-          setOrderbooks(data.orderbooks);
+          useAppStore.getState().setOrderbooks(data.orderbooks);
         }
       })
       .catch((e) => console.error("Orderbook REST fallback failed:", e));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [managedMarkets.length]);
+  }, [marketCount]);
 
   const handleAdd = async () => {
     if (!input.trim()) return;
@@ -76,17 +81,6 @@ export default function MarketsPage() {
     }
   };
 
-  const handleSaveOverride = useCallback(async (conditionId: string, override: StrategyOverride) => {
-    setSavingOverride(true);
-    try {
-      await put(`/api/markets/${conditionId}`, { overrides: override });
-    } catch (e: any) {
-      console.error("Save override failed:", e.message);
-    } finally {
-      setSavingOverride(false);
-    }
-  }, [put]);
-
   const handleDelete = useCallback((conditionId: string) => {
     setDeleteTarget(conditionId);
   }, []);
@@ -97,9 +91,7 @@ export default function MarketsPage() {
       <div className="flex items-center justify-between shrink-0">
         <div>
           <h2 className="text-2xl font-bold">市场管理</h2>
-          <p className="text-sm opacity-60">
-            共 {managedMarkets.length} 个市场
-          </p>
+          <p className="text-sm opacity-60">共 {marketCount} 个市场</p>
         </div>
         <button
           className="btn btn-outline btn-sm"
@@ -129,40 +121,28 @@ export default function MarketsPage() {
               {adding ? <span className="loading loading-spinner loading-xs" /> : "添加"}
             </button>
           </div>
-          {addError && (
-            <div className="text-xs text-error mt-1">{addError}</div>
-          )}
+          {addError && <div className="text-xs text-error mt-1">{addError}</div>}
         </div>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mt-4 min-h-0 flex-1">
         {/* Market Cards — scrollable */}
         <div className="xl:col-span-2 space-y-3 overflow-y-auto pr-1">
-          {managedMarkets.length === 0 ? (
+          {marketCount === 0 ? (
             <div className="card bg-base-100 shadow-sm border border-base-300">
               <div className="card-body items-center text-center py-12">
                 <p className="text-sm opacity-50">暂无市场，通过上方输入框添加。</p>
               </div>
             </div>
           ) : (
-            [...managedMarkets].sort((a, b) => b.addedAt - a.addedAt).map((m) => (
-              <MarketCard
-                key={m.conditionId}
-                market={m}
-                override={marketOverrides[m.conditionId] ?? EMPTY_OVERRIDE}
-                globalConfig={config}
-                selectedTokenId={selectedTokenId}
-                savingOverride={savingOverride}
-                onSelectToken={setSelectedMarketToken}
-                onSaveOverride={handleSaveOverride}
-                onDelete={handleDelete}
-              />
+            sortedIds.map((id) => (
+              <MarketCard key={id} conditionId={id} onDelete={handleDelete} />
             ))
           )}
         </div>
 
-        {/* Order Book — subscribes to its own data */}
-        <OrderBookPanel selectedTokenId={selectedTokenId} managedMarkets={managedMarkets} />
+        {/* Order Book */}
+        <OrderBookPanel />
       </div>
 
       {/* Delete Confirmation */}
@@ -174,16 +154,10 @@ export default function MarketsPage() {
               确定要移除此市场吗？关联的策略覆盖也将一并删除。
             </p>
             <div className="modal-action">
-              <button
-                className="btn btn-ghost btn-sm"
-                onClick={() => setDeleteTarget(null)}
-              >
+              <button className="btn btn-ghost btn-sm" onClick={() => setDeleteTarget(null)}>
                 取消
               </button>
-              <button
-                className="btn btn-error btn-sm"
-                onClick={() => handleDeleteConfirm(deleteTarget)}
-              >
+              <button className="btn btn-error btn-sm" onClick={() => handleDeleteConfirm(deleteTarget)}>
                 确认删除
               </button>
             </div>
@@ -195,20 +169,18 @@ export default function MarketsPage() {
   );
 }
 
-// --- OrderBook Panel (subscribes to its own orderbook + account data) ---
+// ============================================================
+// OrderBook Panel — fully self-contained, subscribes to store
+// ============================================================
 
-function OrderBookPanel({
-  selectedTokenId,
-  managedMarkets,
-}: {
-  selectedTokenId: string | null;
-  managedMarkets: ManagedMarketDto[];
-}) {
+function OrderBookPanel() {
   const systemStatus = useAppStore((s) => s.systemStatus);
-  const selectedBook = useAppStore((s) =>
-    selectedTokenId ? s.orderbooks[selectedTokenId] ?? null : null,
+  const selectedTokenId = useAppStore((s) => s.selectedMarketTokenId);
+  const selectedBook = useAppStore(
+    (s) => (selectedTokenId ? s.orderbooks[selectedTokenId] ?? null : null),
   );
   const accounts = useAppStore((s) => s.accounts);
+  const managedMarkets = useAppStore((s) => s.managedMarkets);
 
   const selectedBookTs = selectedBook?.timestamp ?? null;
   const [elapsed, setElapsed] = useState<number | null>(null);
@@ -260,46 +232,58 @@ function OrderBookPanel({
                 elapsed < 30 ? "text-success" : elapsed < 120 ? "text-warning" : "opacity-40"
               }`}
             >
-              {elapsed < 60 ? `${elapsed}s` : `${Math.floor(elapsed / 60)}m${elapsed % 60}s`} ago
+              {elapsed < 60
+                ? `${elapsed}s`
+                : `${Math.floor(elapsed / 60)}m${elapsed % 60}s`}{" "}
+              ago
             </span>
           )}
         </h3>
         {selectedTokenLabel && (
-          <div className="text-xs opacity-50 -mt-1 mb-1 truncate">
-            {selectedTokenLabel}
-          </div>
+          <div className="text-xs opacity-50 -mt-1 mb-1 truncate">{selectedTokenLabel}</div>
         )}
-        <OrderBookView
-          book={selectedBook || null}
-          highlightPrices={highlightPrices}
-        />
+        <OrderBookView book={selectedBook || null} highlightPrices={highlightPrices} />
       </div>
     </div>
   );
 }
 
-// --- Market Card Component (subscribes to its own orderbook data) ---
+// ============================================================
+// Market Card — subscribes to its own slice, fully independent
+// ============================================================
 
 const MarketCard = memo(function MarketCard({
-  market,
-  override,
-  globalConfig,
-  selectedTokenId,
-  savingOverride,
-  onSelectToken,
-  onSaveOverride,
+  conditionId,
   onDelete,
 }: {
-  market: ManagedMarketDto;
-  override: StrategyOverride;
-  globalConfig: ReturnType<typeof useAppStore.getState>["config"];
-  selectedTokenId: string | null;
-  savingOverride: boolean;
-  onSelectToken: (tokenId: string) => void;
-  onSaveOverride: (conditionId: string, o: StrategyOverride) => void;
+  conditionId: string;
   onDelete: (conditionId: string) => void;
 }) {
+  // Each card subscribes to its own data — no parent-driven re-renders
+  const market = useAppStore((s) => s.managedMarkets.find((m) => m.conditionId === conditionId));
+  const override = useAppStore((s) => s.marketOverrides[conditionId]) ?? EMPTY_OVERRIDE;
+  const config = useAppStore((s) => s.config);
+  const { put } = useApi();
+
   const [showOverrides, setShowOverrides] = useState(false);
+  const [savingOverride, setSavingOverride] = useState(false);
+
+  const handleSaveOverride = useCallback(
+    async (o: StrategyOverride) => {
+      setSavingOverride(true);
+      try {
+        await put(`/api/markets/${conditionId}`, { overrides: o });
+      } catch (e: any) {
+        console.error("Save override failed:", e.message);
+      } finally {
+        setSavingOverride(false);
+      }
+    },
+    [put, conditionId],
+  );
+
+  if (!market) return null;
+
   const overrideCount = Object.keys(override).length;
 
   return (
@@ -308,19 +292,15 @@ const MarketCard = memo(function MarketCard({
         {/* Title Row */}
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0 flex-1">
-            <h3 className="font-semibold text-sm leading-tight line-clamp-2">
-              {market.question}
-            </h3>
+            <h3 className="font-semibold text-sm leading-tight line-clamp-2">{market.question}</h3>
             <div className="flex items-center gap-2 mt-1">
               <span className="text-xs font-mono opacity-40">{market.slug}</span>
-              {market.negRisk && (
-                <span className="badge badge-warning badge-xs">negRisk</span>
-              )}
+              {market.negRisk && <span className="badge badge-warning badge-xs">negRisk</span>}
             </div>
           </div>
           <button
             className="btn btn-ghost btn-xs btn-square text-error shrink-0"
-            onClick={() => onDelete(market.conditionId)}
+            onClick={() => onDelete(conditionId)}
             title="删除市场"
           >
             <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -349,42 +329,33 @@ const MarketCard = memo(function MarketCard({
           </div>
         </div>
 
-        {/* Token Orderbook Info — each row subscribes to its own book */}
+        {/* Token rows — each subscribes to its own data */}
         <div className="space-y-1.5">
           {market.tokens.map((t) => (
-            <TokenRow
-              key={t.token_id}
-              tokenId={t.token_id}
-              outcome={t.outcome}
-              isSelected={t.token_id === selectedTokenId}
-              onSelect={onSelectToken}
-            />
+            <TokenRow key={t.token_id} tokenId={t.token_id} outcome={t.outcome} />
           ))}
         </div>
 
         {/* Override Toggle */}
-        <button
-          className="btn btn-ghost btn-xs gap-1 -ml-1"
-          onClick={() => setShowOverrides(!showOverrides)}
-        >
+        <button className="btn btn-ghost btn-xs gap-1 -ml-1" onClick={() => setShowOverrides(!showOverrides)}>
           <svg
             xmlns="http://www.w3.org/2000/svg"
             className={`h-3 w-3 transition-transform ${showOverrides ? "rotate-90" : ""}`}
-            fill="none" viewBox="0 0 24 24" stroke="currentColor"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
           >
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
           </svg>
           策略覆盖
-          {overrideCount > 0 && (
-            <span className="badge badge-primary badge-xs">{overrideCount}</span>
-          )}
+          {overrideCount > 0 && <span className="badge badge-primary badge-xs">{overrideCount}</span>}
         </button>
 
         {showOverrides && (
           <OverrideEditor
             value={override}
-            globalConfig={globalConfig}
-            onSave={(o) => onSaveOverride(market.conditionId, o)}
+            globalConfig={config}
+            onSave={handleSaveOverride}
             saving={savingOverride}
           />
         )}
@@ -393,19 +364,22 @@ const MarketCard = memo(function MarketCard({
   );
 });
 
-// --- Token Row (subscribes to its own orderbook slice) ---
+// ============================================================
+// Token Row — subscribes to its own orderbook + selection state
+// ============================================================
 
 const TokenRow = memo(function TokenRow({
   tokenId,
   outcome,
-  isSelected,
-  onSelect,
 }: {
   tokenId: string;
   outcome: string;
-  isSelected: boolean;
-  onSelect: (tokenId: string) => void;
 }) {
+  // Only re-renders when THIS token's selection state changes
+  const isSelected = useAppStore((s) => s.selectedMarketTokenId === tokenId);
+  const setSelectedMarketToken = useAppStore((s) => s.setSelectedMarketToken);
+
+  // Only re-renders when best bid/ask actually change (shallow compare numbers)
   const { bestBid, bestAsk, hasBook } = useAppStore(
     useShallow((s) => {
       const book = s.orderbooks[tokenId];
@@ -424,22 +398,14 @@ const TokenRow = memo(function TokenRow({
       className={`flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-colors ${
         isSelected ? "border-primary/40 bg-primary/5" : "border-base-300 hover:border-base-content/20"
       }`}
-      onClick={() => onSelect(tokenId)}
+      onClick={() => setSelectedMarketToken(tokenId)}
     >
-      <span className={`badge badge-sm ${isSelected ? "badge-primary" : "badge-ghost"}`}>
-        {outcome}
-      </span>
+      <span className={`badge badge-sm ${isSelected ? "badge-primary" : "badge-ghost"}`}>{outcome}</span>
       {hasBook ? (
         <div className="flex items-center gap-4 flex-1 text-xs font-mono">
-          <span className="text-success">
-            B {bestBid !== null ? bestBid.toFixed(2) : "—"}
-          </span>
-          <span className="text-error">
-            A {bestAsk !== null ? bestAsk.toFixed(2) : "—"}
-          </span>
-          <span className="opacity-50">
-            差 {spread !== null ? spread.toFixed(3) : "—"}
-          </span>
+          <span className="text-success">B {bestBid !== null ? bestBid.toFixed(2) : "—"}</span>
+          <span className="text-error">A {bestAsk !== null ? bestAsk.toFixed(2) : "—"}</span>
+          <span className="opacity-50">差 {spread !== null ? spread.toFixed(3) : "—"}</span>
         </div>
       ) : (
         <span className="text-xs opacity-30">等待盘口数据...</span>

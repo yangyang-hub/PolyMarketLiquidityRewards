@@ -201,25 +201,23 @@ export class AccountEngine {
           const orderPrice = new Decimal(order.price);
           const isBuy = order.side?.toUpperCase() === "BUY";
 
-          if (config.orderDepthLevel > 0) {
-            const shouldCancel = shouldCancelDepthOrder(
-              book,
-              orderPrice,
-              isBuy,
-              config.cancelDepthLevel,
-            );
+          const shouldCancel = config.cancelDepthLevel > 0
+            ? shouldCancelDepthOrder(book, orderPrice, isBuy, config.cancelDepthLevel)
+            : false;
 
-            if (shouldCancel) {
-              console.log(`[Engine:${this.account.name}] Cancelling ${order.id} (depth trigger)`);
-              const cancelled = await this.executor.cancelOrder(order.id);
-              if (cancelled) {
-                cancelledOrderIds.add(order.id);
-                this.emitEvent("cancelled", order, market.slug);
-              }
+          if (shouldCancel) {
+            console.log(`[Engine:${this.account.name}] Cancelling ${order.id} (depth trigger)`);
+            const cancelled = await this.executor.cancelOrder(order.id);
+            if (cancelled) {
+              cancelledOrderIds.add(order.id);
+              this.emitEvent("cancelled", order, market.slug);
             } else {
-              // Track as active
+              // Cancel failed — order still live, keep tracking
               trackedOrders.push(this.toActiveOrder(order, market.slug, scoringMap));
             }
+          } else {
+            // Track as active
+            trackedOrders.push(this.toActiveOrder(order, market.slug, scoringMap));
           }
         }
 
