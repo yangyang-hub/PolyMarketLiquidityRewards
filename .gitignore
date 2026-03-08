@@ -47,3 +47,6 @@ next-env.d.ts
 
 # data directory (SQLite DB + encryption key)
 /data/
+
+
+polymarketlr.zip
