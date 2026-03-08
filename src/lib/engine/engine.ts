@@ -22,6 +22,10 @@ export class AccountEngine {
   private onEvent: (event: OrderEvent) => void;
   private onStateChange: (name: string, state: AccountState) => void;
 
+  /** Track recently failed orders to avoid retrying every tick. Key: "tokenId:side:price" */
+  private failedOrders: Map<string, number> = new Map();
+  private static FAIL_COOLDOWN_MS = 60_000; // 1 minute cooldown after failure
+
   private static DEBOUNCE_MS = 2000; // coalesce rapid book updates
 
   constructor(
@@ -243,49 +247,67 @@ export class AccountEngine {
 
         // Place buy
         if (!hasBuyAtPrice && quote.bidSize.greaterThan(0)) {
-          const orderId = await this.executor.buyLimitPostOnly(
-            tokenId,
-            quote.bidPrice,
-            quote.bidSize,
-          );
-          if (orderId) {
-            const activeOrder: ActiveOrder = {
-              orderId,
+          const failKey = `${tokenId}:BUY:${quote.bidPrice}`;
+          const lastFail = this.failedOrders.get(failKey);
+          if (lastFail && Date.now() - lastFail < AccountEngine.FAIL_COOLDOWN_MS) {
+            // Skip — recently failed at this price
+          } else {
+            const orderId = await this.executor.buyLimitPostOnly(
               tokenId,
-              marketSlug: market.slug,
-              side: "buy",
-              price: quote.bidPrice.toNumber(),
-              size: quote.bidSize.toNumber(),
-              status: "open",
-              scoring: false,
-              timestamp: Date.now(),
-            };
-            trackedOrders.push(activeOrder);
-            this.emitEvent("placed", { id: orderId, asset_id: tokenId, side: "BUY", price: quote.bidPrice.toString(), original_size: quote.bidSize.toString() } as any, market.slug);
+              quote.bidPrice,
+              quote.bidSize,
+            );
+            if (orderId) {
+              this.failedOrders.delete(failKey);
+              const activeOrder: ActiveOrder = {
+                orderId,
+                tokenId,
+                marketSlug: market.slug,
+                side: "buy",
+                price: quote.bidPrice.toNumber(),
+                size: quote.bidSize.toNumber(),
+                status: "open",
+                scoring: false,
+                timestamp: Date.now(),
+              };
+              trackedOrders.push(activeOrder);
+              this.emitEvent("placed", { id: orderId, asset_id: tokenId, side: "BUY", price: quote.bidPrice.toString(), original_size: quote.bidSize.toString() } as any, market.slug);
+            } else {
+              this.failedOrders.set(failKey, Date.now());
+            }
           }
         }
 
         // Place sell
         if (!hasSellAtPrice && quote.askSize.greaterThan(0)) {
-          const orderId = await this.executor.sellLimitPostOnly(
-            tokenId,
-            quote.askPrice,
-            quote.askSize,
-          );
-          if (orderId) {
-            const activeOrder: ActiveOrder = {
-              orderId,
+          const failKey = `${tokenId}:SELL:${quote.askPrice}`;
+          const lastFail = this.failedOrders.get(failKey);
+          if (lastFail && Date.now() - lastFail < AccountEngine.FAIL_COOLDOWN_MS) {
+            // Skip — recently failed at this price
+          } else {
+            const orderId = await this.executor.sellLimitPostOnly(
               tokenId,
-              marketSlug: market.slug,
-              side: "sell",
-              price: quote.askPrice.toNumber(),
-              size: quote.askSize.toNumber(),
-              status: "open",
-              scoring: false,
-              timestamp: Date.now(),
-            };
-            trackedOrders.push(activeOrder);
-            this.emitEvent("placed", { id: orderId, asset_id: tokenId, side: "SELL", price: quote.askPrice.toString(), original_size: quote.askSize.toString() } as any, market.slug);
+              quote.askPrice,
+              quote.askSize,
+            );
+            if (orderId) {
+              this.failedOrders.delete(failKey);
+              const activeOrder: ActiveOrder = {
+                orderId,
+                tokenId,
+                marketSlug: market.slug,
+                side: "sell",
+                price: quote.askPrice.toNumber(),
+                size: quote.askSize.toNumber(),
+                status: "open",
+                scoring: false,
+                timestamp: Date.now(),
+              };
+              trackedOrders.push(activeOrder);
+              this.emitEvent("placed", { id: orderId, asset_id: tokenId, side: "SELL", price: quote.askPrice.toString(), original_size: quote.askSize.toString() } as any, market.slug);
+            } else {
+              this.failedOrders.set(failKey, Date.now());
+            }
           }
         }
       }
