@@ -6,7 +6,8 @@
     "dev": "tsx server.ts",
     "build": "next build",
     "start": "NODE_ENV=production tsx server.ts",
-    "lint": "eslint"
+    "lint": "eslint",
+    "package": "node scripts/package.mjs"
   },
   "dependencies": {
     "@polymarket/clob-client": "^5.7.0",
@@ -28,6 +29,7 @@
     "@types/react-dom": "^19",
     "@types/ws": "^8.18.1",
     "daisyui": "^5.5.19",
+    "esbuild": "^0.25.12",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
