@@ -10,6 +10,23 @@ import type {
   WsMessage,
 } from "@/types";
 
+/** Shallow-compare two OrderBookDto bid/ask arrays (price + size) */
+function bookEqual(
+  prev: OrderBookDto | undefined,
+  bids: { price: number; size: number }[],
+  asks: { price: number; size: number }[],
+): boolean {
+  if (!prev) return false;
+  if (prev.bids.length !== bids.length || prev.asks.length !== asks.length) return false;
+  for (let i = 0; i < bids.length; i++) {
+    if (prev.bids[i].price !== bids[i].price || prev.bids[i].size !== bids[i].size) return false;
+  }
+  for (let i = 0; i < asks.length; i++) {
+    if (prev.asks[i].price !== asks[i].price || prev.asks[i].size !== asks[i].size) return false;
+  }
+  return true;
+}
+
 interface AppState {
   wsConnected: boolean;
   accounts: AccountState[];
@@ -19,7 +36,6 @@ interface AppState {
   marketOverrides: Record<string, StrategyOverride>;
   selectedMarketTokenId: string | null;
   orderbooks: Record<string, OrderBookDto>;
-  orderbookSeq: number; // increments on each orderbook_update for live indicator
   config: StrategyConfig | null;
   eventLog: OrderEvent[];
   systemStatus: {
@@ -48,7 +64,6 @@ export const useAppStore = create<AppState>((set) => ({
   marketOverrides: {},
   selectedMarketTokenId: null,
   orderbooks: {},
-  orderbookSeq: 0,
   config: null,
   eventLog: [],
   systemStatus: {
@@ -60,19 +75,27 @@ export const useAppStore = create<AppState>((set) => ({
   updateFromWs: (msg) =>
     set((state) => {
       switch (msg.type) {
-        case "orderbook_update":
+        case "orderbook_update": {
+          const prev = state.orderbooks[msg.tokenId];
+          const sortedBids = [...msg.bids].sort((a, b) => b.price - a.price);
+          const sortedAsks = [...msg.asks].sort((a, b) => a.price - b.price);
+          // When data is identical, reuse existing arrays (keeps useShallow stable for TokenRow)
+          // but still update timestamp so the OrderBookPanel elapsed timer stays fresh
+          const dataUnchanged = bookEqual(prev, sortedBids, sortedAsks);
           return {
             orderbooks: {
               ...state.orderbooks,
-              [msg.tokenId]: {
-                tokenId: msg.tokenId,
-                bids: [...msg.bids].sort((a, b) => b.price - a.price),
-                asks: [...msg.asks].sort((a, b) => a.price - b.price),
-                timestamp: msg.timestamp,
-              },
+              [msg.tokenId]: dataUnchanged && prev
+                ? { ...prev, timestamp: msg.timestamp }
+                : {
+                    tokenId: msg.tokenId,
+                    bids: sortedBids,
+                    asks: sortedAsks,
+                    timestamp: msg.timestamp,
+                  },
             },
-            orderbookSeq: state.orderbookSeq + 1,
           };
+        }
 
         case "account_state": {
           const idx = state.accounts.findIndex((a) => a.name === msg.name);
@@ -100,7 +123,15 @@ export const useAppStore = create<AppState>((set) => ({
             eventLog: [msg.event, ...state.eventLog].slice(0, 200),
           };
 
-        case "system_status":
+        case "system_status": {
+          const prev = state.systemStatus;
+          if (
+            prev.wsConnected === msg.wsConnected &&
+            prev.totalAccounts === msg.totalAccounts &&
+            prev.totalMarkets === msg.totalMarkets
+          ) {
+            return {};
+          }
           return {
             systemStatus: {
               wsConnected: msg.wsConnected,
@@ -108,6 +139,7 @@ export const useAppStore = create<AppState>((set) => ({
               totalMarkets: msg.totalMarkets,
             },
           };
+        }
 
         case "managed_markets":
           return {
