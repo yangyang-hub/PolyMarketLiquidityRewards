@@ -245,6 +245,16 @@ export class ClobExecutor {
     }
   }
 
+  /** Ask CLOB server to refresh its cached allowance for this wallet */
+  async refreshAllowanceCache(): Promise<void> {
+    try {
+      await this.client.updateBalanceAllowance({ asset_type: "COLLATERAL" as any });
+      console.log(`[${this.accountName}] Allowance cache refreshed`);
+    } catch (e: any) {
+      console.warn(`[${this.accountName}] refreshAllowanceCache failed:`, e.message);
+    }
+  }
+
   getClient(): ClobClient {
     return this.client;
   }

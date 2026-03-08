@@ -5,7 +5,7 @@ import type { StrategyConfig } from "./types";
 export const defaultConfig: StrategyConfig = {
   orderDepthLevel: 3,
   cancelDepthLevel: 2,
-  minOrderSize: 5,
+  minOrderSize: 1,
   maxPositionPerMarket: 100,
   quoteYes: true,
   quoteNo: true,

@@ -8,24 +8,25 @@ import type { OrderBook, TokenQuote, StrategyConfig } from "../types";
  * - Buy cost  = price * size  (USDC)
  * - Sell cost = (1 - price) * size  (USDC, complement collateral)
  *
- * size = clamp(balance / unitCost, rewardsMinSize, maxPositionPerMarket)
- * Returns 0 if balance cannot cover rewardsMinSize.
+ * Hard floor: config.minOrderSize (user-configured)
+ * Soft target: rewardsMinSize (orders below this won't score for rewards but still placed)
+ * Returns 0 if balance cannot cover config.minOrderSize.
  */
 function computeSideSize(
   price: Decimal,
   isBuy: boolean,
   balance: Decimal,
-  rewardsMinSize: Decimal,
+  _rewardsMinSize: Decimal,
   config: StrategyConfig,
 ): Decimal {
   const unitCost = isBuy ? price : new Decimal(1).minus(price);
   if (unitCost.isZero() || unitCost.isNeg()) return new Decimal(0);
 
   const affordable = balance.dividedBy(unitCost).toDecimalPlaces(2, Decimal.ROUND_DOWN);
-  const minSize = Decimal.max(new Decimal(config.minOrderSize), rewardsMinSize);
+  const minSize = new Decimal(config.minOrderSize);
   const maxSize = new Decimal(config.maxPositionPerMarket);
 
-  // If balance can't cover minimum, skip
+  // If balance can't cover the user-configured minimum, skip
   if (affordable.lessThan(minSize)) return new Decimal(0);
 
   // Clamp: at least minSize, at most maxPositionPerMarket, at most affordable

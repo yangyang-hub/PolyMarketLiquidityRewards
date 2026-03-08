@@ -152,7 +152,24 @@ export class AccountEngine {
     // Get account balance for sizing (same balance available for all tokens)
     const accountState = store.accounts.get(this.account.name);
     const balance = new Decimal(accountState?.balance || 0);
-    console.log(`[Engine:${this.account.name}] Balance: $${balance}`);
+
+    // Count TOTAL quoted tokens across ALL markets to split balance evenly
+    let totalQuotedTokens = 0;
+    for (const market of markets) {
+      const cfg = resolveConfig(
+        store.config,
+        store.accountOverrides[this.account.name],
+        store.marketOverrides[market.conditionId],
+      );
+      for (let i = 0; i < market.tokens.length; i++) {
+        if (i === 0 && cfg.quoteYes) totalQuotedTokens++;
+        if (i !== 0 && cfg.quoteNo) totalQuotedTokens++;
+      }
+    }
+    const tokenBalance = totalQuotedTokens > 1
+      ? balance.dividedBy(totalQuotedTokens).toDecimalPlaces(2, Decimal.ROUND_DOWN)
+      : balance;
+    console.log(`[Engine:${this.account.name}] Balance: $${balance}, ${totalQuotedTokens} quoted tokens, $${tokenBalance}/token`);
 
     // Process each market
     for (const market of markets) {
@@ -221,11 +238,31 @@ export class AccountEngine {
           new Decimal(0),
           config,
           rewardsMinSize,
-          balance,
+          tokenBalance,
         );
 
         if (!quote) {
-          console.log(`[Engine:${this.account.name}] ${token.outcome}: quote=null (depth=${config.orderDepthLevel}, bids=${book.bids.length}, asks=${book.asks.length}, maxSpread=${rewardsMaxSpread})`);
+          // Diagnose why quote is null
+          const dl = config.orderDepthLevel;
+          let reason = "unknown";
+          if (book.bids.length < dl || book.asks.length < dl) {
+            reason = `insufficient depth (need ${dl}, have bids=${book.bids.length} asks=${book.asks.length})`;
+          } else {
+            const depthBid = book.bids[dl - 1].price;
+            const depthAsk = book.asks[dl - 1].price;
+            if (depthBid.greaterThanOrEqualTo(depthAsk)) {
+              reason = `crossed (bid[${dl-1}]=${depthBid} >= ask[${dl-1}]=${depthAsk})`;
+            } else if (depthBid.lessThan("0.01")) {
+              reason = `bid too low (bid[${dl-1}]=${depthBid} < 0.01)`;
+            } else if (depthAsk.greaterThan("0.99")) {
+              reason = `ask too high (ask[${dl-1}]=${depthAsk} > 0.99)`;
+            } else {
+              const buyAffordable = tokenBalance.dividedBy(depthBid).toDecimalPlaces(2, Decimal.ROUND_DOWN);
+              const sellAffordable = tokenBalance.dividedBy(new Decimal(1).minus(depthAsk)).toDecimalPlaces(2, Decimal.ROUND_DOWN);
+              reason = `sizing (balance=$${tokenBalance}, minSize=${rewardsMinSize}/${config.minOrderSize}, buyAfford=${buyAffordable}, sellAfford=${sellAffordable}, bid=${depthBid}, ask=${depthAsk})`;
+            }
+          }
+          console.log(`[Engine:${this.account.name}] ${token.outcome}: quote=null — ${reason}`);
           continue;
         }
 
