@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, memo, useCallback } from "react";
 import { useAppStore } from "@/stores/appStore";
 import { useApi } from "@/hooks/useApi";
 import type { AccountConfigDto, AccountState, StrategyOverride } from "@/types";
@@ -139,7 +139,7 @@ function IconWallet({ className = "h-4 w-4" }: { className?: string }) {
 
 // --- Account Card Component ---
 
-function AccountCardItem({
+const AccountCardItem = memo(function AccountCardItem({
   name,
   account,
   cfg,
@@ -160,13 +160,13 @@ function AccountCardItem({
   override: StrategyOverride;
   globalConfig: ReturnType<typeof useAppStore.getState>["config"];
   savingOverride: boolean;
-  onEdit: () => void;
-  onDelete: () => void;
-  onStart: () => void;
-  onStop: () => void;
-  onCancelOrder: (orderId: string) => Promise<void>;
-  onCancelAll: () => Promise<void>;
-  onSaveOverride: (o: StrategyOverride) => void;
+  onEdit: (name: string) => void;
+  onDelete: (name: string) => void;
+  onStart: (name: string) => void;
+  onStop: (name: string) => void;
+  onCancelOrder: (name: string, orderId: string) => Promise<void>;
+  onCancelAll: (name: string) => Promise<void>;
+  onSaveOverride: (name: string, o: StrategyOverride) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showOverrides, setShowOverrides] = useState(false);
@@ -209,14 +209,14 @@ function AccountCardItem({
                 <button
                   className="btn btn-ghost btn-xs btn-square tooltip tooltip-bottom"
                   data-tip="编辑"
-                  onClick={onEdit}
+                  onClick={() => onEdit(name)}
                 >
                   <IconPencil />
                 </button>
                 <button
                   className="btn btn-ghost btn-xs btn-square text-error tooltip tooltip-bottom"
                   data-tip="删除"
-                  onClick={onDelete}
+                  onClick={() => onDelete(name)}
                 >
                   <IconTrash />
                 </button>
@@ -226,14 +226,14 @@ function AccountCardItem({
             {account && account.status === "running" ? (
               <button
                 className="btn btn-warning btn-outline btn-xs"
-                onClick={onStop}
+                onClick={() => onStop(name)}
               >
                 停止
               </button>
             ) : account ? (
               <button
                 className="btn btn-primary btn-xs"
-                onClick={onStart}
+                onClick={() => onStart(name)}
                 disabled={account.status === "stopping"}
               >
                 启动
@@ -307,8 +307,8 @@ function AccountCardItem({
                   <div className="mt-2">
                     <OrderTable
                       orders={account.activeOrders}
-                      onCancelOrder={onCancelOrder}
-                      onCancelAll={onCancelAll}
+                      onCancelOrder={(orderId) => onCancelOrder(name, orderId)}
+                      onCancelAll={() => onCancelAll(name)}
                     />
                   </div>
                 )}
@@ -342,7 +342,7 @@ function AccountCardItem({
               <OverrideEditor
                 value={override}
                 globalConfig={globalConfig}
-                onSave={onSaveOverride}
+                onSave={(o) => onSaveOverride(name, o)}
                 saving={savingOverride}
               />
             </div>
@@ -351,8 +351,7 @@ function AccountCardItem({
       </div>
     </div>
   );
-}
-
+});
 // --- Main Page ---
 
 export default function AccountsPage() {
@@ -453,7 +452,7 @@ export default function AccountsPage() {
     }
   };
 
-  const handleDelete = async () => {
+  const confirmDelete = async () => {
     if (!deleteTarget) return;
     setDeleteError("");
     setLoading(true);
@@ -472,7 +471,7 @@ export default function AccountsPage() {
   const getConfigForAccount = (name: string) =>
     accountConfigs.find((c) => c.name === name);
 
-  const handleSaveOverride = async (accountName: string, override: StrategyOverride) => {
+  const handleSaveOverride = useCallback(async (accountName: string, override: StrategyOverride) => {
     setSavingOverride(true);
     try {
       await put(`/api/accounts/${encodeURIComponent(accountName)}/overrides`, { overrides: override });
@@ -481,7 +480,34 @@ export default function AccountsPage() {
     } finally {
       setSavingOverride(false);
     }
-  };
+  }, [put]);
+
+  const handleEdit = useCallback((name: string) => {
+    const cfg = accountConfigs.find((c) => c.name === name);
+    if (cfg) openEditModal(cfg);
+  }, [accountConfigs]);
+
+  const handleDelete = useCallback((name: string) => {
+    setDeleteTarget(name);
+    setDeleteError("");
+    deleteModalRef.current?.showModal();
+  }, []);
+
+  const handleStart = useCallback((name: string) => {
+    post(`/api/accounts/${encodeURIComponent(name)}/start`);
+  }, [post]);
+
+  const handleStop = useCallback((name: string) => {
+    post(`/api/accounts/${encodeURIComponent(name)}/stop`);
+  }, [post]);
+
+  const handleCancelOrder = useCallback(async (name: string, orderId: string) => {
+    await post(`/api/accounts/${encodeURIComponent(name)}/cancel-order`, { orderId });
+  }, [post]);
+
+  const handleCancelAll = useCallback(async (name: string) => {
+    await post(`/api/accounts/${encodeURIComponent(name)}/cancel-all`);
+  }, [post]);
 
   // Merge account names from both sources, deduplicated, ordered
   const allNames = [
@@ -543,17 +569,13 @@ export default function AccountsPage() {
                 override={accountOverrides[name] || {}}
                 globalConfig={config}
                 savingOverride={savingOverride}
-                onEdit={() => cfg && openEditModal(cfg)}
-                onDelete={() => {
-                  setDeleteTarget(name);
-                  setDeleteError("");
-                  deleteModalRef.current?.showModal();
-                }}
-                onStart={() => post(`/api/accounts/${encodeURIComponent(name)}/start`)}
-                onStop={() => post(`/api/accounts/${encodeURIComponent(name)}/stop`)}
-                onCancelOrder={async (orderId) => { await post(`/api/accounts/${encodeURIComponent(name)}/cancel-order`, { orderId }); }}
-                onCancelAll={async () => { await post(`/api/accounts/${encodeURIComponent(name)}/cancel-all`); }}
-                onSaveOverride={(o) => handleSaveOverride(name, o)}
+                onEdit={handleEdit}
+                onDelete={handleDelete}
+                onStart={handleStart}
+                onStop={handleStop}
+                onCancelOrder={handleCancelOrder}
+                onCancelAll={handleCancelAll}
+                onSaveOverride={handleSaveOverride}
               />
             );
           })}
@@ -834,7 +856,7 @@ export default function AccountsPage() {
             </form>
             <button
               className="btn btn-error btn-sm gap-1"
-              onClick={handleDelete}
+              onClick={confirmDelete}
               disabled={loading}
             >
               {loading ? (

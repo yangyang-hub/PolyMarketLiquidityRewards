@@ -74,14 +74,26 @@ export const useAppStore = create<AppState>((set) => ({
             orderbookSeq: state.orderbookSeq + 1,
           };
 
-        case "account_state":
-          return {
-            accounts: state.accounts.some((a) => a.name === msg.name)
-              ? state.accounts.map((a) =>
-                  a.name === msg.name ? msg.state : a,
-                )
-              : [...state.accounts, msg.state],
-          };
+        case "account_state": {
+          const idx = state.accounts.findIndex((a) => a.name === msg.name);
+          if (idx >= 0) {
+            const prev = state.accounts[idx];
+            // Skip update if nothing meaningful changed
+            if (
+              prev.balance === msg.state.balance &&
+              prev.status === msg.state.status &&
+              prev.activeOrders.length === msg.state.activeOrders.length &&
+              prev.marketsCount === msg.state.marketsCount &&
+              prev.error === msg.state.error
+            ) {
+              return {};
+            }
+            const next = [...state.accounts];
+            next[idx] = msg.state;
+            return { accounts: next };
+          }
+          return { accounts: [...state.accounts, msg.state] };
+        }
 
         case "order_event":
           return {

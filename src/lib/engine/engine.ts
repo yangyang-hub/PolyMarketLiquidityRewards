@@ -345,12 +345,17 @@ export class AccountEngine {
 
     // Update account state (including fresh balance)
     const freshBalance = await this.executor.getCollateralBalance();
+    const prev = store.accounts.get(this.account.name);
+    const balanceChanged = prev?.balance !== freshBalance;
+    const ordersChanged = prev?.activeOrders.length !== trackedOrders.length;
     store.updateAccount(this.account.name, {
       activeOrders: trackedOrders,
       marketsCount: markets.length,
       balance: freshBalance,
     });
-    this.broadcastState();
+    if (balanceChanged || ordersChanged) {
+      this.broadcastState();
+    }
   }
 
   private toActiveOrder(
