@@ -106,6 +106,14 @@ run("npx", ["next", "build"]);
 
 console.log("\n========== Step 2: esbuild compile server.ts ==========");
 
+// Read the nextConfig that Next.js generated during build.
+// Setting __NEXT_PRIVATE_STANDALONE_CONFIG before require('next') tells Next.js
+// to use this pre-built config instead of loading it from disk (which needs webpack).
+const requiredServerFiles = JSON.parse(
+  readFileSync(resolve(ROOT, ".next/required-server-files.json"), "utf-8"),
+);
+const nextConfigJson = JSON.stringify(JSON.stringify(requiredServerFiles.config));
+
 const { build } = await import("esbuild");
 
 await build({
@@ -115,19 +123,22 @@ await build({
   target: "node20",
   format: "cjs",
   outfile: resolve(ROOT, "dist-server.js"),
+  banner: {
+    js: [
+      `process.chdir(__dirname);`,
+      `process.env.__NEXT_PRIVATE_STANDALONE_CONFIG = ${nextConfigJson};`,
+    ].join("\n"),
+  },
   external: [
+    // Only packages that exist in standalone node_modules (native modules + framework)
     "next",
     "react",
     "react-dom",
     "better-sqlite3",
     "bindings",
     "file-uri-to-path",
-    "ws",
-    "ethers",
-    "@ethersproject/*",
-    "decimal.js",
-    "@polymarket/*",
-    "zustand",
+    // Everything else (ws, ethers, decimal.js, @polymarket/*, zustand, etc.)
+    // is bundled into server.js by esbuild
   ],
   alias: { "@": resolve(ROOT, "src") },
   logLevel: "info",
@@ -232,6 +243,7 @@ console.log("\n========== Step 5: Generate startup files ==========");
 // 5a. 启动.bat
 const batContent = `@echo off\r
 chcp 65001 >nul\r
+cd /d "%~dp0"\r
 title PolyMarket 流动性挖矿\r
 echo.\r
 echo   PolyMarket 流动性挖矿系统\r
@@ -240,7 +252,10 @@ echo   启动中，请稍候...\r
 echo.\r
 set NODE_ENV=production\r
 start "" "http://localhost:3000"\r
-node.exe server.js\r
+"%~dp0node.exe" server.js\r
+echo.\r
+echo   程序已停止。按任意键关闭窗口...\r
+pause >nul\r
 `;
 writeFileSync(resolve(DIST, "启动.bat"), batContent);
 console.log("  Generated 启动.bat");
