@@ -17,37 +17,16 @@ export interface OrderBook {
 // --- Strategy Config ---
 
 export interface StrategyConfig {
-  orderDepthLevel: number;
   cancelDepthLevel: number;
-  minOrderSize: number;
-  maxPositionPerMarket: number;
-  quoteYes: boolean;
-  quoteNo: boolean;
 }
 
-// Overridable strategy fields (field-level partial)
-export interface StrategyOverride {
-  orderDepthLevel?: number;
-  cancelDepthLevel?: number;
-  minOrderSize?: number;
-  maxPositionPerMarket?: number;
-  quoteYes?: boolean;
-  quoteNo?: boolean;
-}
+// --- Discovered Market (auto-discovered from wallet orders) ---
 
-// Manually managed market (persisted in DB)
-export interface ManagedMarket {
+export interface DiscoveredMarket {
   conditionId: string;
   slug: string;
   question: string;
   tokens: MarketToken[];
-  negRisk: boolean;
-  active: boolean;
-  rewardsMaxSpread: number;
-  rewardsMinSize: number;
-  dailyRate: number;
-  liquidity: number;
-  addedAt: number;
 }
 
 // --- Account ---
@@ -114,13 +93,6 @@ export interface MarketInfo {
   liquidity: number;
 }
 
-export interface TokenQuote {
-  bidPrice: Decimal;
-  askPrice: Decimal;
-  bidSize: Decimal;
-  askSize: Decimal;
-}
-
 // --- Events ---
 
 export type OrderEventType = "placed" | "cancelled" | "filled" | "moved";
@@ -163,21 +135,8 @@ export type WsMessage =
       totalMarkets: number;
     }
   | {
-      type: "managed_markets";
-      markets: ManagedMarket[];
-    }
-  | {
-      type: "market_added";
-      market: ManagedMarket;
-    }
-  | {
-      type: "market_removed";
-      conditionId: string;
-    }
-  | {
-      type: "overrides_update";
-      accountOverrides: Record<string, StrategyOverride>;
-      marketOverrides: Record<string, StrategyOverride>;
+      type: "discovered_markets";
+      markets: DiscoveredMarket[];
     }
   | {
       type: "config_update";

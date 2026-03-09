@@ -1,7 +1,6 @@
 import type {
   StrategyConfig,
-  StrategyOverride,
-  ManagedMarket,
+  DiscoveredMarket,
   AccountState,
   OrderBook,
   OrderEvent,
@@ -9,13 +8,6 @@ import type {
 import {
   dbLoadStrategyConfig,
   dbSaveStrategyConfig,
-  dbGetAllMarkets,
-  dbGetAllAccountOverrides,
-  dbGetAllMarketOverrides,
-  dbAddMarket,
-  dbRemoveMarket,
-  dbSetAccountOverride,
-  dbSetMarketOverride,
 } from "../db/database";
 
 const MAX_EVENT_LOG = 200;
@@ -24,16 +16,11 @@ class MemoryStore {
   config: StrategyConfig;
   accounts: Map<string, AccountState> = new Map();
   orderbooks: Map<string, OrderBook> = new Map(); // tokenId -> OrderBook
-  managedMarkets: ManagedMarket[] = [];
-  accountOverrides: Record<string, StrategyOverride> = {};
-  marketOverrides: Record<string, StrategyOverride> = {};
+  discoveredMarkets: Map<string, DiscoveredMarket> = new Map(); // conditionId -> DiscoveredMarket
   eventLog: OrderEvent[] = [];
 
   constructor() {
     this.config = dbLoadStrategyConfig();
-    this.managedMarkets = dbGetAllMarkets();
-    this.accountOverrides = dbGetAllAccountOverrides();
-    this.marketOverrides = dbGetAllMarketOverrides();
   }
 
   updateConfig(partial: Partial<StrategyConfig>): void {
@@ -70,34 +57,12 @@ class MemoryStore {
     }
   }
 
-  // --- Managed Markets ---
-
-  addMarket(market: ManagedMarket): void {
-    dbAddMarket(market);
-    this.managedMarkets.push(market);
-  }
-
-  removeMarket(conditionId: string): void {
-    dbRemoveMarket(conditionId);
-    this.managedMarkets = this.managedMarkets.filter(
-      (m) => m.conditionId !== conditionId,
-    );
-  }
-
-  // --- Overrides ---
-
-  setAccountOverride(accountName: string, override: StrategyOverride): void {
-    dbSetAccountOverride(accountName, override);
-    this.accountOverrides[accountName] = override;
-  }
-
-  setMarketOverride(conditionId: string, override: StrategyOverride): void {
-    dbSetMarketOverride(conditionId, override);
-    this.marketOverrides[conditionId] = override;
-  }
-
   getAccountStates(): AccountState[] {
     return Array.from(this.accounts.values());
+  }
+
+  getDiscoveredMarketsList(): DiscoveredMarket[] {
+    return Array.from(this.discoveredMarkets.values());
   }
 }
 

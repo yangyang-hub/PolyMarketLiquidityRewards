@@ -3,12 +3,7 @@ import type { StrategyConfig } from "./types";
 // --- Default Strategy Config ---
 
 export const defaultConfig: StrategyConfig = {
-  orderDepthLevel: 3,
   cancelDepthLevel: 2,
-  minOrderSize: 1,
-  maxPositionPerMarket: 100,
-  quoteYes: true,
-  quoteNo: true,
 };
 
 function envInt(key: string, fallback: number): number {

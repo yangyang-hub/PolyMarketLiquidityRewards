@@ -44,21 +44,7 @@ export interface OrderBookDto {
 }
 
 export interface StrategyConfig {
-  orderDepthLevel: number;
   cancelDepthLevel: number;
-  minOrderSize: number;
-  maxPositionPerMarket: number;
-  quoteYes: boolean;
-  quoteNo: boolean;
-}
-
-export interface StrategyOverride {
-  orderDepthLevel?: number;
-  cancelDepthLevel?: number;
-  minOrderSize?: number;
-  maxPositionPerMarket?: number;
-  quoteYes?: boolean;
-  quoteNo?: boolean;
 }
 
 export interface MarketToken {
@@ -67,18 +53,11 @@ export interface MarketToken {
   winner: boolean;
 }
 
-export interface ManagedMarketDto {
+export interface DiscoveredMarketDto {
   conditionId: string;
   slug: string;
   question: string;
   tokens: MarketToken[];
-  negRisk: boolean;
-  active: boolean;
-  rewardsMaxSpread: number;
-  rewardsMinSize: number;
-  dailyRate: number;
-  liquidity: number;
-  addedAt: number;
 }
 
 export type OrderEventType = "placed" | "cancelled" | "filled" | "moved";
@@ -119,21 +98,8 @@ export type WsMessage =
       totalMarkets: number;
     }
   | {
-      type: "managed_markets";
-      markets: ManagedMarketDto[];
-    }
-  | {
-      type: "market_added";
-      market: ManagedMarketDto;
-    }
-  | {
-      type: "market_removed";
-      conditionId: string;
-    }
-  | {
-      type: "overrides_update";
-      accountOverrides: Record<string, StrategyOverride>;
-      marketOverrides: Record<string, StrategyOverride>;
+      type: "discovered_markets";
+      markets: DiscoveredMarketDto[];
     }
   | {
       type: "config_update";

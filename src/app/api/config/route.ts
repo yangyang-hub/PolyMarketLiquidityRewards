@@ -7,6 +7,9 @@ export async function GET() {
 
 export async function PUT(request: Request) {
   const body = await request.json();
-  engineManager.updateConfig(body);
+  const { cancelDepthLevel } = body;
+  if (typeof cancelDepthLevel === "number" && cancelDepthLevel >= 0) {
+    engineManager.updateConfig({ cancelDepthLevel });
+  }
   return NextResponse.json({ config: engineManager.getConfig() });
 }

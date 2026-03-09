@@ -3,10 +3,9 @@
 import { useEffect, useRef, useState, memo, useCallback } from "react";
 import { useAppStore } from "@/stores/appStore";
 import { useApi } from "@/hooks/useApi";
-import type { AccountConfigDto, AccountState, StrategyOverride } from "@/types";
+import type { AccountConfigDto, AccountState } from "@/types";
 import StatusBadge from "@/components/StatusBadge";
 import OrderTable from "@/components/OrderTable";
-import OverrideEditor from "@/components/OverrideEditor";
 
 // --- Types ---
 
@@ -143,35 +142,25 @@ const AccountCardItem = memo(function AccountCardItem({
   name,
   account,
   cfg,
-  override,
-  globalConfig,
-  savingOverride,
   onEdit,
   onDelete,
   onStart,
   onStop,
   onCancelOrder,
   onCancelAll,
-  onSaveOverride,
 }: {
   name: string;
   account?: AccountState;
   cfg?: AccountConfigDto;
-  override: StrategyOverride;
-  globalConfig: ReturnType<typeof useAppStore.getState>["config"];
-  savingOverride: boolean;
   onEdit: (name: string) => void;
   onDelete: (name: string) => void;
   onStart: (name: string) => void;
   onStop: (name: string) => void;
   onCancelOrder: (name: string, orderId: string) => Promise<void>;
   onCancelAll: (name: string) => Promise<void>;
-  onSaveOverride: (name: string, o: StrategyOverride) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const [showOverrides, setShowOverrides] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const hasOrders = account && account.activeOrders.length > 0;
-  const overrideCount = Object.keys(override).length;
 
   return (
     <div className="card bg-base-100 shadow-sm border border-base-300 transition-shadow hover:shadow-md">
@@ -318,47 +307,16 @@ const AccountCardItem = memo(function AccountCardItem({
             )}
           </div>
         )}
-
-        {/* Strategy Override */}
-        <div className="px-4 pb-3">
-          <button
-            className="btn btn-ghost btn-xs gap-1 -ml-1"
-            onClick={() => setShowOverrides(!showOverrides)}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              className={`h-3 w-3 transition-transform ${showOverrides ? "rotate-90" : ""}`}
-              fill="none" viewBox="0 0 24 24" stroke="currentColor"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-            策略覆盖
-            {overrideCount > 0 && (
-              <span className="badge badge-primary badge-xs">{overrideCount}</span>
-            )}
-          </button>
-          {showOverrides && (
-            <div className="mt-2">
-              <OverrideEditor
-                value={override}
-                globalConfig={globalConfig}
-                onSave={(o) => onSaveOverride(name, o)}
-                saving={savingOverride}
-              />
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );
 });
+
 // --- Main Page ---
 
 export default function AccountsPage() {
   const accounts = useAppStore((s) => s.accounts);
   const accountConfigs = useAppStore((s) => s.accountConfigs);
-  const accountOverrides = useAppStore((s) => s.accountOverrides);
-  const config = useAppStore((s) => s.config);
   const setAccountConfigs = useAppStore((s) => s.setAccountConfigs);
   const { get, post, put, del } = useApi();
 
@@ -370,7 +328,6 @@ export default function AccountsPage() {
   const [loading, setLoading] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
-  const [savingOverride, setSavingOverride] = useState(false);
 
   const modalRef = useRef<HTMLDialogElement>(null);
   const deleteModalRef = useRef<HTMLDialogElement>(null);
@@ -381,7 +338,6 @@ export default function AccountsPage() {
   const markTouched = (field: string) =>
     setTouched((prev) => ({ ...prev, [field]: true }));
 
-  // Only show error for a field after user has interacted with it
   const fieldError = (field: keyof FieldErrors) =>
     touched[field] ? fieldErrors[field] : undefined;
 
@@ -421,7 +377,6 @@ export default function AccountsPage() {
   };
 
   const handleSubmit = async () => {
-    // Touch all fields to surface validation
     setTouched({ name: true, privateKey: true, proxyWallet: true });
     const errors = validateForm(form, !!editingName);
     if (Object.keys(errors).length > 0) return;
@@ -470,17 +425,6 @@ export default function AccountsPage() {
 
   const getConfigForAccount = (name: string) =>
     accountConfigs.find((c) => c.name === name);
-
-  const handleSaveOverride = useCallback(async (accountName: string, override: StrategyOverride) => {
-    setSavingOverride(true);
-    try {
-      await put(`/api/accounts/${encodeURIComponent(accountName)}/overrides`, { overrides: override });
-    } catch (e: any) {
-      console.error("Save override failed:", e.message);
-    } finally {
-      setSavingOverride(false);
-    }
-  }, [put]);
 
   const handleEdit = useCallback((name: string) => {
     const cfg = accountConfigs.find((c) => c.name === name);
@@ -544,7 +488,7 @@ export default function AccountsPage() {
             </div>
             <h3 className="font-semibold text-lg">暂无账户</h3>
             <p className="text-sm opacity-50 max-w-xs mt-1">
-              添加做市账户以开始自动挂单。私钥使用 AES-256-GCM 加密存储在本地数据库中。
+              添加账户以开始监控挂单。私钥使用 AES-256-GCM 加密存储在本地数据库中。
             </p>
             <button
               className="btn btn-primary btn-sm gap-1 mt-4"
@@ -566,23 +510,19 @@ export default function AccountsPage() {
                 name={name}
                 account={account}
                 cfg={cfg}
-                override={accountOverrides[name] || {}}
-                globalConfig={config}
-                savingOverride={savingOverride}
                 onEdit={handleEdit}
                 onDelete={handleDelete}
                 onStart={handleStart}
                 onStop={handleStop}
                 onCancelOrder={handleCancelOrder}
                 onCancelAll={handleCancelAll}
-                onSaveOverride={handleSaveOverride}
               />
             );
           })}
         </div>
       )}
 
-      {/* ── Add/Edit Modal ── */}
+      {/* Add/Edit Modal */}
       <dialog ref={modalRef} className="modal">
         <div className="modal-box max-w-md">
           {/* Modal Header */}
@@ -617,7 +557,7 @@ export default function AccountsPage() {
             onSubmit={(e) => { e.preventDefault(); handleSubmit(); }}
             className="space-y-4"
           >
-            {/* ── Name ── */}
+            {/* Name */}
             {!editingName && (
               <div className="form-control">
                 <label className="label pb-1">
@@ -656,7 +596,7 @@ export default function AccountsPage() {
               </div>
             )}
 
-            {/* ── Private Key ── */}
+            {/* Private Key */}
             <div className="form-control">
               <label className="label pb-1">
                 <span className="label-text flex items-center gap-1.5 text-sm">
@@ -716,7 +656,7 @@ export default function AccountsPage() {
               )}
             </div>
 
-            {/* ── Signature Type ── */}
+            {/* Signature Type */}
             <div className="form-control">
               <label className="label pb-1">
                 <span className="label-text flex items-center gap-1.5 text-sm">
@@ -753,7 +693,7 @@ export default function AccountsPage() {
               </div>
             </div>
 
-            {/* ── Proxy Wallet (conditional) ── */}
+            {/* Proxy Wallet (conditional) */}
             {showNeedsProxy && (
               <div className="form-control">
                 <label className="label pb-1">
@@ -792,7 +732,7 @@ export default function AccountsPage() {
               </div>
             )}
 
-            {/* ── Actions ── */}
+            {/* Actions */}
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
                 type="button"
@@ -826,7 +766,7 @@ export default function AccountsPage() {
         <div className="modal-backdrop" />
       </dialog>
 
-      {/* ── Delete Confirmation Modal ── */}
+      {/* Delete Confirmation Modal */}
       <dialog ref={deleteModalRef} className="modal">
         <div className="modal-box max-w-sm">
           <div className="flex items-center gap-3 mb-4">

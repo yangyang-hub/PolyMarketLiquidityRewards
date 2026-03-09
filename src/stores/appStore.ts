@@ -4,8 +4,7 @@ import type {
   AccountConfigDto,
   OrderBookDto,
   StrategyConfig,
-  StrategyOverride,
-  ManagedMarketDto,
+  DiscoveredMarketDto,
   OrderEvent,
   WsMessage,
 } from "@/types";
@@ -31,9 +30,7 @@ interface AppState {
   wsConnected: boolean;
   accounts: AccountState[];
   accountConfigs: AccountConfigDto[];
-  managedMarkets: ManagedMarketDto[];
-  accountOverrides: Record<string, StrategyOverride>;
-  marketOverrides: Record<string, StrategyOverride>;
+  discoveredMarkets: DiscoveredMarketDto[];
   selectedMarketTokenId: string | null;
   orderbooks: Record<string, OrderBookDto>;
   config: StrategyConfig | null;
@@ -50,7 +47,7 @@ interface AppState {
   setConfig: (config: StrategyConfig) => void;
   setAccounts: (accounts: AccountState[]) => void;
   setAccountConfigs: (configs: AccountConfigDto[]) => void;
-  setManagedMarkets: (markets: ManagedMarketDto[]) => void;
+  setDiscoveredMarkets: (markets: DiscoveredMarketDto[]) => void;
   setOrderbooks: (books: Record<string, OrderBookDto>) => void;
   setWsConnected: (connected: boolean) => void;
 }
@@ -59,9 +56,7 @@ export const useAppStore = create<AppState>((set) => ({
   wsConnected: false,
   accounts: [],
   accountConfigs: [],
-  managedMarkets: [],
-  accountOverrides: {},
-  marketOverrides: {},
+  discoveredMarkets: [],
   selectedMarketTokenId: null,
   orderbooks: {},
   config: null,
@@ -79,8 +74,6 @@ export const useAppStore = create<AppState>((set) => ({
           const prev = state.orderbooks[msg.tokenId];
           const sortedBids = [...msg.bids].sort((a, b) => b.price - a.price);
           const sortedAsks = [...msg.asks].sort((a, b) => a.price - b.price);
-          // When data is identical, reuse existing arrays (keeps useShallow stable for TokenRow)
-          // but still update timestamp so the OrderBookPanel elapsed timer stays fresh
           const dataUnchanged = bookEqual(prev, sortedBids, sortedAsks);
           return {
             orderbooks: {
@@ -101,7 +94,6 @@ export const useAppStore = create<AppState>((set) => ({
           const idx = state.accounts.findIndex((a) => a.name === msg.name);
           if (idx >= 0) {
             const prev = state.accounts[idx];
-            // Skip update if nothing meaningful changed
             if (
               prev.balance === msg.state.balance &&
               prev.status === msg.state.status &&
@@ -141,27 +133,9 @@ export const useAppStore = create<AppState>((set) => ({
           };
         }
 
-        case "managed_markets":
+        case "discovered_markets":
           return {
-            managedMarkets: msg.markets,
-          };
-
-        case "market_added":
-          return {
-            managedMarkets: [...state.managedMarkets, msg.market],
-          };
-
-        case "market_removed":
-          return {
-            managedMarkets: state.managedMarkets.filter(
-              (m) => m.conditionId !== msg.conditionId,
-            ),
-          };
-
-        case "overrides_update":
-          return {
-            accountOverrides: msg.accountOverrides,
-            marketOverrides: msg.marketOverrides,
+            discoveredMarkets: msg.markets,
           };
 
         case "config_update":
@@ -179,7 +153,7 @@ export const useAppStore = create<AppState>((set) => ({
   setConfig: (config) => set({ config }),
   setAccounts: (accounts) => set({ accounts }),
   setAccountConfigs: (configs) => set({ accountConfigs: configs }),
-  setManagedMarkets: (markets) => set({ managedMarkets: markets }),
+  setDiscoveredMarkets: (markets) => set({ discoveredMarkets: markets }),
   setOrderbooks: (books) => set((state) => {
     const sorted: Record<string, typeof books[string]> = {};
     for (const [tokenId, book] of Object.entries(books)) {

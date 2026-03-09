@@ -4,14 +4,14 @@ import { getClobHost } from "@/lib/config";
 
 /**
  * GET /api/markets/orderbooks
- * Fetches orderbooks for all managed market tokens from CLOB REST API.
+ * Fetches orderbooks for all discovered market tokens from CLOB REST API.
  * Frontend fallback when WS data is not yet available.
  */
 export async function GET() {
   const host = getClobHost();
   const orderbooks: Record<string, { tokenId: string; bids: any[]; asks: any[]; timestamp: number }> = {};
 
-  for (const market of store.managedMarkets) {
+  for (const market of store.discoveredMarkets.values()) {
     for (const token of market.tokens) {
       try {
         const resp = await fetch(`${host}/book?token_id=${token.token_id}`);

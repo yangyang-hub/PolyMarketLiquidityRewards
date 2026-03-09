@@ -6,37 +6,33 @@ import type {
   OrderEvent,
 } from "../types";
 import { ClobExecutor } from "../clob/executor";
-import {
-  computeDepthQuotes,
-  shouldCancelDepthOrder,
-} from "../strategy/depth-strategy";
-import { resolveConfig } from "../strategy/config-resolver";
+import { shouldCancelDepthOrder } from "../strategy/depth-strategy";
 import { store } from "../store/memory-store";
 
 export class AccountEngine {
   private account: AccountConfig;
   private executor: ClobExecutor;
   private running = false;
-  private tickTimer: ReturnType<typeof setTimeout> | null = null;
+  private periodicTimer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
+  private cancelling = false; // guard for realtimeCheck
   private onEvent: (event: OrderEvent) => void;
   private onStateChange: (name: string, state: AccountState) => void;
+  private onTokensDiscovered: (accountName: string, tokenIds: Set<string>) => void;
 
-  /** Track recently failed orders to avoid retrying every tick. Key: "tokenId:side:price" */
-  private failedOrders: Map<string, number> = new Map();
-  private static FAIL_COOLDOWN_MS = 60_000; // 1 minute cooldown after failure
-
-  private static DEBOUNCE_MS = 2000; // coalesce rapid book updates
+  private static PERIODIC_MS = 15_000; // 15s full refresh
 
   constructor(
     account: AccountConfig,
     onEvent: (event: OrderEvent) => void,
     onStateChange: (name: string, state: AccountState) => void,
+    onTokensDiscovered: (accountName: string, tokenIds: Set<string>) => void,
   ) {
     this.account = account;
     this.executor = new ClobExecutor(account);
     this.onEvent = onEvent;
     this.onStateChange = onStateChange;
+    this.onTokensDiscovered = onTokensDiscovered;
   }
 
   async start(): Promise<void> {
@@ -50,8 +46,21 @@ export class AccountEngine {
       const balance = await this.executor.getCollateralBalance();
       store.updateAccount(this.account.name, { status: "running", balance });
       this.broadcastState();
-      // Run initial tick immediately
-      this.scheduleTick();
+
+      // Initial discovery: pull orders immediately to trigger subscriptions
+      await this.discover();
+
+      // Start periodic full tick (refresh order list + balance from API)
+      this.periodicTimer = setInterval(async () => {
+        if (!this.running || this.ticking) return;
+        this.ticking = true;
+        try {
+          await this.tick();
+        } catch (e: any) {
+          console.error(`[Engine:${this.account.name}] Periodic tick error:`, e.message);
+        }
+        this.ticking = false;
+      }, AccountEngine.PERIODIC_MS);
     } catch (e: any) {
       console.error(`[Engine:${this.account.name}] Init failed:`, e.message);
       store.updateAccount(this.account.name, { status: "error", error: e.message });
@@ -67,17 +76,11 @@ export class AccountEngine {
     store.updateAccount(this.account.name, { status: "stopping" });
     this.broadcastState();
 
-    if (this.tickTimer) {
-      clearTimeout(this.tickTimer);
-      this.tickTimer = null;
+    if (this.periodicTimer) {
+      clearInterval(this.periodicTimer);
+      this.periodicTimer = null;
     }
 
-    // Cancel all orders and wait for completion
-    try {
-      await this.executor.cancelAll();
-    } catch (e: any) {
-      console.error(`[Engine:${this.account.name}] cancelAll failed:`, e.message);
-    }
     store.updateAccount(this.account.name, {
       status: "idle",
       activeOrders: [],
@@ -99,261 +102,157 @@ export class AccountEngine {
     await this.executor.cancelAll();
   }
 
-  /** Called by manager when an orderbook update arrives. Debounces into a tick. */
-  onBookUpdate(_tokenId: string): void {
+  /**
+   * Called by manager when an orderbook update arrives.
+   * Immediately checks cached orders against the new book — no API call, no debounce.
+   */
+  onBookUpdate(tokenId: string): void {
     if (!this.running) return;
-    this.scheduleTick();
+    this.realtimeCancelCheck(tokenId);
   }
 
-  private scheduleTick(): void {
-    if (this.tickTimer) return; // already scheduled
-    this.tickTimer = setTimeout(async () => {
-      this.tickTimer = null;
-      if (!this.running || this.ticking) return;
-      this.ticking = true;
-      try {
-        await this.tick();
-      } catch (e: any) {
-        console.error(`[Engine:${this.account.name}] Tick error:`, e.message);
-      }
-      this.ticking = false;
-    }, AccountEngine.DEBOUNCE_MS);
-  }
-
-  private async tick(): Promise<void> {
-    const markets = store.managedMarkets.filter((m) => m.active);
-
-    if (markets.length === 0) {
-      console.log(`[Engine:${this.account.name}] No managed markets available`);
-      return;
+  /** Initial discovery: pull orders once to trigger subscriptions */
+  private async discover(): Promise<void> {
+    try {
+      await this.tick();
+    } catch (e: any) {
+      console.error(`[Engine:${this.account.name}] Discover error:`, e.message);
     }
+  }
 
-    console.log(`[Engine:${this.account.name}] Tick: ${markets.length} markets, ${store.orderbooks.size} orderbooks cached`);
+  /**
+   * Realtime cancel check: uses cached activeOrders from store (no API call).
+   * Only checks orders matching the updated tokenId.
+   */
+  private async realtimeCancelCheck(tokenId: string): Promise<void> {
+    if (this.cancelling) return;
+    this.cancelling = true;
+    try {
+      const cancelDepthLevel = store.config.cancelDepthLevel;
+      if (cancelDepthLevel === 0) return;
 
-    // Get all open orders
+      const book = store.orderbooks.get(tokenId);
+      if (!book) return;
+
+      const accountState = store.accounts.get(this.account.name);
+      if (!accountState) return;
+
+      const ordersForToken = accountState.activeOrders.filter((o) => o.tokenId === tokenId);
+      if (ordersForToken.length === 0) return;
+
+      for (const order of ordersForToken) {
+        const orderPrice = new Decimal(order.price);
+        const isBuy = order.side === "buy";
+
+        if (shouldCancelDepthOrder(book, orderPrice, isBuy, cancelDepthLevel)) {
+          const slug = order.marketSlug || this.findSlugForToken(tokenId);
+          console.log(`[Engine:${this.account.name}] Cancelling ${order.orderId} (realtime depth trigger, token=${tokenId.slice(0, 12)}...)`);
+          const cancelled = await this.executor.cancelOrder(order.orderId);
+          if (cancelled) {
+            this.emitEvent("cancelled", {
+              id: order.orderId,
+              asset_id: order.tokenId,
+              side: order.side === "buy" ? "BUY" : "SELL",
+              price: String(order.price),
+              original_size: String(order.size),
+            }, slug);
+
+            // Remove from cached orders immediately
+            const current = store.accounts.get(this.account.name);
+            if (current) {
+              store.updateAccount(this.account.name, {
+                activeOrders: current.activeOrders.filter((o) => o.orderId !== order.orderId),
+              });
+              this.broadcastState();
+            }
+          }
+        }
+      }
+    } catch (e: any) {
+      console.error(`[Engine:${this.account.name}] Realtime check error:`, e.message);
+    } finally {
+      this.cancelling = false;
+    }
+  }
+
+  /**
+   * Full tick: pulls fresh orders from API, refreshes balance, syncs tokenIds.
+   * Called periodically (every 15s) and on initial discovery.
+   */
+  private async tick(): Promise<void> {
+    const cancelDepthLevel = store.config.cancelDepthLevel;
+
+    // 1. Get all open orders from API
     const openOrders = await this.executor.getOpenOrders();
     const trackedOrders: ActiveOrder[] = [];
+    const activeTokenIds = new Set<string>();
 
-    // Build map of token -> orders
-    const ordersByToken = new Map<string, typeof openOrders>();
-    for (const o of openOrders) {
-      const list = ordersByToken.get(o.asset_id) || [];
-      list.push(o);
-      ordersByToken.set(o.asset_id, list);
-    }
+    console.log(`[Engine:${this.account.name}] Tick: ${openOrders.length} open orders, cancelDepth=${cancelDepthLevel}`);
 
     // Check scoring status
     const allOrderIds = openOrders.map((o) => o.id);
-    const scoringMap = await this.executor.areOrdersScoring(allOrderIds);
+    const scoringMap = allOrderIds.length > 0
+      ? await this.executor.areOrdersScoring(allOrderIds)
+      : {};
 
-    // Track which orders were cancelled this tick
-    const cancelledOrderIds = new Set<string>();
+    // 2. Process each order: check cancel condition
+    for (const order of openOrders) {
+      const tokenId = order.asset_id;
+      activeTokenIds.add(tokenId);
 
-    // Get account balance for sizing
-    const accountState = store.accounts.get(this.account.name);
-    const balance = new Decimal(accountState?.balance || 0);
-    console.log(`[Engine:${this.account.name}] Balance: $${balance}, ${markets.length} markets`);
+      const book = store.orderbooks.get(tokenId);
+      const orderPrice = new Decimal(order.price);
+      const isBuy = order.side?.toUpperCase() === "BUY";
 
-    // Process each market
-    for (const market of markets) {
-      // Resolve layered config: global -> account override -> market override
-      const config = resolveConfig(
-        store.config,
-        store.accountOverrides[this.account.name],
-        store.marketOverrides[market.conditionId],
-      );
+      const slug = this.findSlugForToken(tokenId);
 
-      const rewardsMaxSpread = new Decimal(market.rewardsMaxSpread);
-      const rewardsMinSize = new Decimal(market.rewardsMinSize);
+      if (book && cancelDepthLevel > 0) {
+        const shouldCancel = shouldCancelDepthOrder(book, orderPrice, isBuy, cancelDepthLevel);
 
-      // Only split when quoting BOTH Yes and No in this market
-      let quotedInMarket = 0;
-      for (let i = 0; i < market.tokens.length; i++) {
-        if (i === 0 && config.quoteYes) quotedInMarket++;
-        if (i !== 0 && config.quoteNo) quotedInMarket++;
-      }
-      const tokenBalance = quotedInMarket > 1
-        ? balance.dividedBy(quotedInMarket).toDecimalPlaces(2, Decimal.ROUND_DOWN)
-        : balance;
-
-      for (const token of market.tokens) {
-        const tokenId = token.token_id;
-
-        // Skip based on outcome type
-        // First token = "Yes" side, second token = "No" side
-        const tokenIndex = market.tokens.indexOf(token);
-        const isFirstOutcome = tokenIndex === 0;
-
-        if (isFirstOutcome && !config.quoteYes) continue;
-        if (!isFirstOutcome && !config.quoteNo) continue;
-
-        // Get orderbook
-        const book = store.orderbooks.get(tokenId);
-        if (!book || book.bids.length === 0 || book.asks.length === 0) {
-          console.log(`[Engine:${this.account.name}] ${token.outcome}: no orderbook data (bids=${book?.bids.length ?? 0}, asks=${book?.asks.length ?? 0})`);
-          continue;
-        }
-
-        const existingOrders = ordersByToken.get(tokenId) || [];
-
-        // Check existing orders: should we cancel?
-        for (const order of existingOrders) {
-          const orderPrice = new Decimal(order.price);
-          const isBuy = order.side?.toUpperCase() === "BUY";
-
-          const shouldCancel = config.cancelDepthLevel > 0
-            ? shouldCancelDepthOrder(book, orderPrice, isBuy, config.cancelDepthLevel)
-            : false;
-
-          if (shouldCancel) {
-            console.log(`[Engine:${this.account.name}] Cancelling ${order.id} (depth trigger)`);
-            const cancelled = await this.executor.cancelOrder(order.id);
-            if (cancelled) {
-              cancelledOrderIds.add(order.id);
-              this.emitEvent("cancelled", order, market.slug);
-            } else {
-              // Cancel failed — order still live, keep tracking
-              trackedOrders.push(this.toActiveOrder(order, market.slug, scoringMap));
-            }
+        if (shouldCancel) {
+          console.log(`[Engine:${this.account.name}] Cancelling ${order.id} (tick depth trigger, token=${tokenId.slice(0, 12)}...)`);
+          const cancelled = await this.executor.cancelOrder(order.id);
+          if (cancelled) {
+            this.emitEvent("cancelled", order, slug);
           } else {
-            // Track as active
-            trackedOrders.push(this.toActiveOrder(order, market.slug, scoringMap));
+            trackedOrders.push(this.toActiveOrder(order, slug, scoringMap));
           }
+        } else {
+          trackedOrders.push(this.toActiveOrder(order, slug, scoringMap));
         }
-
-        // Compute quotes at depth level
-        const quote = computeDepthQuotes(
-          book,
-          config.orderDepthLevel,
-          rewardsMaxSpread,
-          new Decimal(0),
-          config,
-          rewardsMinSize,
-          tokenBalance,
-        );
-
-        if (!quote) {
-          // Diagnose why quote is null
-          const dl = config.orderDepthLevel;
-          let reason = "unknown";
-          if (book.bids.length < dl || book.asks.length < dl) {
-            reason = `insufficient depth (need ${dl}, have bids=${book.bids.length} asks=${book.asks.length})`;
-          } else {
-            const depthBid = book.bids[dl - 1].price;
-            const depthAsk = book.asks[dl - 1].price;
-            if (depthBid.greaterThanOrEqualTo(depthAsk)) {
-              reason = `crossed (bid[${dl-1}]=${depthBid} >= ask[${dl-1}]=${depthAsk})`;
-            } else if (depthBid.lessThan("0.01")) {
-              reason = `bid too low (bid[${dl-1}]=${depthBid} < 0.01)`;
-            } else if (depthAsk.greaterThan("0.99")) {
-              reason = `ask too high (ask[${dl-1}]=${depthAsk} > 0.99)`;
-            } else {
-              const buyAffordable = tokenBalance.dividedBy(depthBid).toDecimalPlaces(2, Decimal.ROUND_DOWN);
-              const sellAffordable = tokenBalance.dividedBy(new Decimal(1).minus(depthAsk)).toDecimalPlaces(2, Decimal.ROUND_DOWN);
-              reason = `sizing (balance=$${tokenBalance}, minSize=${rewardsMinSize}/${config.minOrderSize}, buyAfford=${buyAffordable}, sellAfford=${sellAffordable}, bid=${depthBid}, ask=${depthAsk})`;
-            }
-          }
-          console.log(`[Engine:${this.account.name}] ${token.outcome}: quote=null — ${reason}`);
-          continue;
-        }
-
-        console.log(`[Engine:${this.account.name}] ${token.outcome}: quote bid=${quote.bidPrice}×${quote.bidSize} ask=${quote.askPrice}×${quote.askSize}`);
-
-        // Check if we already have LIVE (non-cancelled) orders at these prices
-        const hasBuyAtPrice = existingOrders.some(
-          (o) =>
-            !cancelledOrderIds.has(o.id) &&
-            o.side?.toUpperCase() === "BUY" &&
-            new Decimal(o.price).equals(quote!.bidPrice),
-        );
-        const hasSellAtPrice = existingOrders.some(
-          (o) =>
-            !cancelledOrderIds.has(o.id) &&
-            o.side?.toUpperCase() === "SELL" &&
-            new Decimal(o.price).equals(quote!.askPrice),
-        );
-
-        // Place buy
-        if (!hasBuyAtPrice && quote.bidSize.greaterThan(0)) {
-          const failKey = `${tokenId}:BUY:${quote.bidPrice}`;
-          const lastFail = this.failedOrders.get(failKey);
-          if (lastFail && Date.now() - lastFail < AccountEngine.FAIL_COOLDOWN_MS) {
-            // Skip — recently failed at this price
-          } else {
-            const orderId = await this.executor.buyLimitPostOnly(
-              tokenId,
-              quote.bidPrice,
-              quote.bidSize,
-            );
-            if (orderId) {
-              this.failedOrders.delete(failKey);
-              const activeOrder: ActiveOrder = {
-                orderId,
-                tokenId,
-                marketSlug: market.slug,
-                side: "buy",
-                price: quote.bidPrice.toNumber(),
-                size: quote.bidSize.toNumber(),
-                status: "open",
-                scoring: false,
-                timestamp: Date.now(),
-              };
-              trackedOrders.push(activeOrder);
-              this.emitEvent("placed", { id: orderId, asset_id: tokenId, side: "BUY", price: quote.bidPrice.toString(), original_size: quote.bidSize.toString() } as any, market.slug);
-            } else {
-              this.failedOrders.set(failKey, Date.now());
-            }
-          }
-        }
-
-        // Place sell
-        if (!hasSellAtPrice && quote.askSize.greaterThan(0)) {
-          const failKey = `${tokenId}:SELL:${quote.askPrice}`;
-          const lastFail = this.failedOrders.get(failKey);
-          if (lastFail && Date.now() - lastFail < AccountEngine.FAIL_COOLDOWN_MS) {
-            // Skip — recently failed at this price
-          } else {
-            const orderId = await this.executor.sellLimitPostOnly(
-              tokenId,
-              quote.askPrice,
-              quote.askSize,
-            );
-            if (orderId) {
-              this.failedOrders.delete(failKey);
-              const activeOrder: ActiveOrder = {
-                orderId,
-                tokenId,
-                marketSlug: market.slug,
-                side: "sell",
-                price: quote.askPrice.toNumber(),
-                size: quote.askSize.toNumber(),
-                status: "open",
-                scoring: false,
-                timestamp: Date.now(),
-              };
-              trackedOrders.push(activeOrder);
-              this.emitEvent("placed", { id: orderId, asset_id: tokenId, side: "SELL", price: quote.askPrice.toString(), original_size: quote.askSize.toString() } as any, market.slug);
-            } else {
-              this.failedOrders.set(failKey, Date.now());
-            }
-          }
-        }
+      } else {
+        trackedOrders.push(this.toActiveOrder(order, slug, scoringMap));
       }
     }
 
-    // Update account state (including fresh balance)
+    // 3. Notify manager of active tokenIds for subscription management
+    this.onTokensDiscovered(this.account.name, activeTokenIds);
+
+    // Update account state
     const freshBalance = await this.executor.getCollateralBalance();
+    const uniqueOrders = Array.from(
+      new Map(trackedOrders.map((o) => [o.orderId, o])).values(),
+    );
     const prev = store.accounts.get(this.account.name);
     const balanceChanged = prev?.balance !== freshBalance;
-    const ordersChanged = prev?.activeOrders.length !== trackedOrders.length;
+    const ordersChanged = prev?.activeOrders.length !== uniqueOrders.length;
     store.updateAccount(this.account.name, {
-      activeOrders: trackedOrders,
-      marketsCount: markets.length,
+      activeOrders: uniqueOrders,
+      marketsCount: activeTokenIds.size,
       balance: freshBalance,
     });
     if (balanceChanged || ordersChanged) {
       this.broadcastState();
     }
+  }
+
+  private findSlugForToken(tokenId: string): string {
+    for (const market of store.discoveredMarkets.values()) {
+      if (market.tokens.some((t) => t.token_id === tokenId)) {
+        return market.slug;
+      }
+    }
+    return "";
   }
 
   private toActiveOrder(

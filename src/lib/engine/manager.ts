@@ -3,10 +3,9 @@ import Decimal from "decimal.js";
 import type {
   AccountConfig,
   AccountState,
-  ManagedMarket,
+  DiscoveredMarket,
   OrderBook,
   StrategyConfig,
-  StrategyOverride,
   WsMessage,
 } from "../types";
 import {
@@ -16,13 +15,12 @@ import {
   dbUpdateAccount,
   dbDeleteAccount,
   dbGetAccountConfig,
-  dbUpdateMarketRewards,
   dbSetAccountEnabled,
   dbGetEnabledAccountNames,
 } from "../db/database";
 import { ClobWsFeed } from "../clob/ws-feed";
 import { ClobExecutor } from "../clob/executor";
-import { fetchMarketByConditionId, fetchMarketBySlug } from "../gamma/api";
+import { fetchMarketsByTokenIds } from "../gamma/api";
 import { store } from "../store/memory-store";
 import { AccountEngine } from "./engine";
 import { ethers } from "ethers";
@@ -35,8 +33,10 @@ class EngineManager {
   private accountConfigs: AccountConfig[] = [];
   private wsFeed: ClobWsFeed;
   private wsClients: Set<WebSocket> = new Set();
-  private rewardRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private initialized = false;
+
+  /** Track all active tokenIds across all accounts */
+  private allActiveTokenIds: Set<string> = new Set();
 
   constructor() {
     this.wsFeed = new ClobWsFeed((tokenId, book) => {
@@ -74,12 +74,7 @@ class EngineManager {
       });
 
       // Create engine
-      const engine = new AccountEngine(
-        acc,
-        (event) => this.broadcast({ type: "order_event", event }),
-        (name, state) => this.broadcast({ type: "account_state", name, state }),
-      );
-      this.engines.set(acc.name, engine);
+      this.createEngine(acc);
 
       // Fetch balance in background and refresh allowance cache
       const executor = new ClobExecutor(acc);
@@ -98,37 +93,19 @@ class EngineManager {
     // Start WS feed
     this.wsFeed.start();
 
-    // Subscribe to existing managed markets' tokens
-    const tokenIds: string[] = [];
-    for (const m of store.managedMarkets) {
-      for (const t of m.tokens) {
-        tokenIds.push(t.token_id);
-      }
-    }
-    if (tokenIds.length > 0) {
-      this.wsFeed.subscribe(tokenIds);
-      // Fetch initial orderbooks
-      await this.fetchOrderbooks(tokenIds);
-    }
-
-    // Periodic reward refresh (every 30 minutes)
-    this.rewardRefreshTimer = setInterval(
-      () => this.refreshMarketRewards(),
-      30 * 60 * 1000,
-    );
-
     // Periodic diagnostics log (every 60 seconds)
     setInterval(() => {
       console.log(
         `[Manager] Status: CLOB WS ${this.wsFeed.connected ? "connected" : "disconnected"}, ` +
         `updates=${this.wsFeed.updateCount}, ` +
         `browsers=${this.wsClients.size}, ` +
-        `tokens=${[...new Set(store.managedMarkets.flatMap(m => m.tokens.map(t => t.token_id)))].length}`,
+        `tokens=${this.allActiveTokenIds.size}, ` +
+        `discovered=${store.discoveredMarkets.size}`,
       );
     }, 60_000);
 
     this.initialized = true;
-    console.log(`[Manager] Initialized with ${this.accountConfigs.length} accounts, ${store.managedMarkets.length} markets`);
+    console.log(`[Manager] Initialized with ${this.accountConfigs.length} accounts`);
     this.broadcastSystemStatus();
 
     // Auto-start accounts that were enabled before restart
@@ -145,6 +122,136 @@ class EngineManager {
         }
       }
     }
+  }
+
+  private createEngine(acc: AccountConfig): AccountEngine {
+    const engine = new AccountEngine(
+      acc,
+      (event) => this.broadcast({ type: "order_event", event }),
+      (name, state) => this.broadcast({ type: "account_state", name, state }),
+      (accountName, tokenIds) => this.handleTokensDiscovered(accountName, tokenIds),
+    );
+    this.engines.set(acc.name, engine);
+    return engine;
+  }
+
+  // --- Token Discovery & Subscription Sync ---
+
+  /**
+   * Called by engines after each tick with the set of tokenIds that have active orders.
+   * Aggregates across all engines and syncs WS subscriptions accordingly.
+   */
+  private async handleTokensDiscovered(_accountName: string, tokenIds: Set<string>): Promise<void> {
+    // Aggregate all active tokenIds across all running engines
+    const allTokenIds = new Set<string>();
+    // Include the just-reported tokens
+    for (const id of tokenIds) allTokenIds.add(id);
+    // Include tokens from other running engines' latest known orders
+    for (const [name, engine] of this.engines) {
+      if (!engine.isRunning()) continue;
+      const state = store.accounts.get(name);
+      if (state) {
+        for (const order of state.activeOrders) {
+          allTokenIds.add(order.tokenId);
+        }
+      }
+    }
+
+    await this.syncSubscriptions(allTokenIds);
+  }
+
+  /**
+   * Sync WS subscriptions and market discovery based on active tokenIds.
+   * - New tokens → subscribe + fetch market info from Gamma
+   * - Gone tokens → unsubscribe + clean orderbook cache
+   */
+  async syncSubscriptions(activeTokenIds: Set<string>): Promise<void> {
+    const prevTokenIds = this.allActiveTokenIds;
+
+    // Find new and gone tokens
+    const newTokenIds: string[] = [];
+    for (const id of activeTokenIds) {
+      if (!prevTokenIds.has(id)) newTokenIds.push(id);
+    }
+    const goneTokenIds: string[] = [];
+    for (const id of prevTokenIds) {
+      if (!activeTokenIds.has(id)) goneTokenIds.push(id);
+    }
+
+    this.allActiveTokenIds = new Set(activeTokenIds);
+
+    // Subscribe to new tokens
+    if (newTokenIds.length > 0) {
+      console.log(`[Manager] Subscribing to ${newTokenIds.length} new tokens`);
+      this.wsFeed.subscribe(newTokenIds);
+      await this.fetchOrderbooks(newTokenIds);
+
+      // Trigger a tick on all running engines so they re-evaluate with fresh book data
+      for (const engine of this.engines.values()) {
+        if (engine.isRunning()) {
+          engine.onBookUpdate(newTokenIds[0]);
+        }
+      }
+
+      // Fetch market info from Gamma for unknown tokens
+      const unknownTokenIds = newTokenIds.filter((id) => {
+        // Check if this token is already part of a discovered market
+        for (const market of store.discoveredMarkets.values()) {
+          if (market.tokens.some((t) => t.token_id === id)) return false;
+        }
+        return true;
+      });
+
+      if (unknownTokenIds.length > 0) {
+        try {
+          const marketMap = await fetchMarketsByTokenIds(unknownTokenIds);
+          for (const [, info] of marketMap) {
+            if (!store.discoveredMarkets.has(info.condition_id)) {
+              const discovered: DiscoveredMarket = {
+                conditionId: info.condition_id,
+                slug: info.slug,
+                question: info.question,
+                tokens: info.tokens,
+              };
+              store.discoveredMarkets.set(info.condition_id, discovered);
+              console.log(`[Manager] Discovered market: ${info.question.slice(0, 60)}`);
+            }
+          }
+          // Broadcast updated market list
+          this.broadcast({
+            type: "discovered_markets",
+            markets: store.getDiscoveredMarketsList(),
+          });
+        } catch (e: any) {
+          console.error("[Manager] Failed to fetch market info:", e.message);
+        }
+      }
+    }
+
+    // Unsubscribe gone tokens
+    if (goneTokenIds.length > 0) {
+      console.log(`[Manager] Unsubscribing ${goneTokenIds.length} gone tokens`);
+      this.wsFeed.unsubscribe(goneTokenIds);
+      for (const id of goneTokenIds) {
+        store.orderbooks.delete(id);
+      }
+
+      // Clean up discovered markets that no longer have any active tokens
+      for (const [conditionId, market] of store.discoveredMarkets) {
+        const hasActiveToken = market.tokens.some((t) => activeTokenIds.has(t.token_id));
+        if (!hasActiveToken) {
+          store.discoveredMarkets.delete(conditionId);
+          console.log(`[Manager] Removed discovered market: ${market.question.slice(0, 60)}`);
+        }
+      }
+
+      this.broadcast({
+        type: "discovered_markets",
+        markets: store.getDiscoveredMarketsList(),
+      });
+    }
+
+    this.broadcastSystemStatus();
   }
 
   // --- Account Management ---
@@ -172,12 +279,7 @@ class EngineManager {
     this.accountConfigs.push(acc);
 
     // Create engine
-    const engine = new AccountEngine(
-      acc,
-      (event) => this.broadcast({ type: "order_event", event }),
-      (n, state) => this.broadcast({ type: "account_state", name: n, state }),
-    );
-    this.engines.set(name, engine);
+    this.createEngine(acc);
 
     // Update store
     store.updateAccount(name, { status: "idle", address: wallet.address });
@@ -220,12 +322,7 @@ class EngineManager {
     const idx = this.accountConfigs.findIndex((a) => a.name === name);
     if (idx >= 0) this.accountConfigs[idx] = newConfig;
 
-    const newEngine = new AccountEngine(
-      newConfig,
-      (event) => this.broadcast({ type: "order_event", event }),
-      (n, state) => this.broadcast({ type: "account_state", name: n, state }),
-    );
-    this.engines.set(name, newEngine);
+    this.createEngine(newConfig);
 
     const wallet = new ethers.Wallet(newConfig.privateKey);
     store.updateAccount(name, { status: "idle", address: wallet.address });
@@ -250,180 +347,6 @@ class EngineManager {
 
     this.broadcast({ type: "account_configs", configs: dbGetAllAccountMetas() });
     this.broadcastSystemStatus();
-  }
-
-  // --- Market Management ---
-
-  async addMarket(input: string): Promise<ManagedMarket> {
-    const isSlug = input.includes("-") && !/^0x[0-9a-fA-F]+$/.test(input);
-
-    let marketInfo;
-    if (isSlug) {
-      marketInfo = await fetchMarketBySlug(input);
-    } else {
-      marketInfo = await fetchMarketByConditionId(input);
-    }
-    if (!marketInfo) throw new Error(`Market not found: ${input}`);
-
-    if (!marketInfo.tokens || marketInfo.tokens.length === 0) {
-      throw new Error(`Market has no tokens (clobTokenIds): ${input}`);
-    }
-
-    console.log(`[Manager] Market found: ${marketInfo.question}, ${marketInfo.tokens.length} tokens`);
-    for (const t of marketInfo.tokens) {
-      console.log(`[Manager]   token: ${t.outcome} → ${t.token_id.slice(0, 20)}...`);
-    }
-
-    // Check if already managed
-    if (store.managedMarkets.some((m) => m.conditionId === marketInfo!.condition_id)) {
-      throw new Error(`Market already managed: ${marketInfo.condition_id}`);
-    }
-
-    // Fetch CLOB rewards for this market
-    let rewardsMaxSpread = marketInfo.rewards?.max_spread || 0;
-    let rewardsMinSize = marketInfo.rewards?.min_size || 0;
-    let dailyRate = 0;
-
-    const firstAcc = this.accountConfigs[0];
-    if (firstAcc) {
-      try {
-        const executor = new ClobExecutor(firstAcc);
-        await executor.initApiKeys();
-        const rawRewards = await executor.getCurrentRewards();
-        const match = rawRewards.find((r: any) => r.condition_id === marketInfo!.condition_id);
-        if (match) {
-          rewardsMaxSpread = match.rewards_max_spread || 0;
-          rewardsMinSize = match.rewards_min_size || 0;
-          dailyRate = (match.rewards_config || []).reduce(
-            (sum: number, c: any) => sum + (c.rate_per_day || 0),
-            0,
-          );
-        }
-      } catch (e: any) {
-        console.error("[Manager] Failed to get CLOB rewards for market:", e.message);
-      }
-    }
-
-    const managed: ManagedMarket = {
-      conditionId: marketInfo.condition_id,
-      slug: marketInfo.slug,
-      question: marketInfo.question,
-      tokens: marketInfo.tokens,
-      negRisk: marketInfo.neg_risk,
-      active: marketInfo.active,
-      rewardsMaxSpread,
-      rewardsMinSize,
-      dailyRate,
-      liquidity: marketInfo.liquidity,
-      addedAt: Math.floor(Date.now() / 1000),
-    };
-
-    store.addMarket(managed);
-
-    // Subscribe to WS feed for token IDs
-    const tokenIds = managed.tokens.map((t) => t.token_id);
-    this.wsFeed.subscribe(tokenIds);
-    await this.fetchOrderbooks(tokenIds);
-
-    // Trigger a tick on all running engines so they pick up the new market
-    for (const engine of this.engines.values()) {
-      if (engine.isRunning()) {
-        engine.onBookUpdate(tokenIds[0]);
-      }
-    }
-
-    this.broadcast({ type: "market_added", market: managed });
-    this.broadcastSystemStatus();
-
-    return managed;
-  }
-
-  removeMarket(conditionId: string): void {
-    const market = store.managedMarkets.find((m) => m.conditionId === conditionId);
-    if (!market) throw new Error(`Market not found: ${conditionId}`);
-
-    // Unsubscribe from WS feed and clean orderbook cache
-    const tokenIds = market.tokens.map((t) => t.token_id);
-    this.wsFeed.unsubscribe(tokenIds);
-    for (const id of tokenIds) {
-      store.orderbooks.delete(id);
-    }
-
-    store.removeMarket(conditionId);
-    this.broadcast({ type: "market_removed", conditionId });
-    this.broadcastSystemStatus();
-  }
-
-  // --- Override Management ---
-
-  setAccountOverride(accountName: string, override: StrategyOverride): void {
-    store.setAccountOverride(accountName, override);
-    this.broadcast({
-      type: "overrides_update",
-      accountOverrides: store.accountOverrides,
-      marketOverrides: store.marketOverrides,
-    });
-  }
-
-  setMarketOverride(conditionId: string, override: StrategyOverride): void {
-    store.setMarketOverride(conditionId, override);
-    this.broadcast({
-      type: "overrides_update",
-      accountOverrides: store.accountOverrides,
-      marketOverrides: store.marketOverrides,
-    });
-  }
-
-  // --- Reward Refresh ---
-
-  async refreshMarketRewards(): Promise<void> {
-    const firstAcc = this.accountConfigs[0];
-    if (!firstAcc || store.managedMarkets.length === 0) return;
-
-    try {
-      console.log("[Manager] Refreshing market rewards...");
-      const executor = new ClobExecutor(firstAcc);
-      await executor.initApiKeys();
-      const rawRewards = await executor.getCurrentRewards();
-
-      const rewardsMap = new Map<string, any>();
-      for (const r of rawRewards) {
-        rewardsMap.set(r.condition_id, r);
-      }
-
-      let changed = false;
-      for (const market of store.managedMarkets) {
-        const match = rewardsMap.get(market.conditionId);
-        if (match) {
-          const maxSpread = match.rewards_max_spread || 0;
-          const minSize = match.rewards_min_size || 0;
-          const rate = (match.rewards_config || []).reduce(
-            (sum: number, c: any) => sum + (c.rate_per_day || 0),
-            0,
-          );
-          if (
-            market.rewardsMaxSpread !== maxSpread ||
-            market.rewardsMinSize !== minSize ||
-            market.dailyRate !== rate
-          ) {
-            dbUpdateMarketRewards(market.conditionId, maxSpread, minSize, rate, market.liquidity);
-            market.rewardsMaxSpread = maxSpread;
-            market.rewardsMinSize = minSize;
-            market.dailyRate = rate;
-            changed = true;
-          }
-        }
-      }
-
-      if (changed) {
-        this.broadcast({ type: "managed_markets", markets: store.managedMarkets });
-        console.log("[Manager] Market rewards refreshed (data changed)");
-      } else {
-        console.log("[Manager] Market rewards refreshed (no changes)");
-      }
-    } catch (e: any) {
-      console.error("[Manager] Reward refresh failed:", e.message);
-    }
   }
 
   // --- Engine Control ---
@@ -488,8 +411,8 @@ class EngineManager {
     return store.getAccountStates();
   }
 
-  getManagedMarkets(): ManagedMarket[] {
-    return store.managedMarkets;
+  getDiscoveredMarkets(): DiscoveredMarket[] {
+    return store.getDiscoveredMarketsList();
   }
 
   getConfig(): StrategyConfig {
@@ -532,7 +455,7 @@ class EngineManager {
       type: "system_status",
       wsConnected: this.wsFeed.connected,
       totalAccounts: this.engines.size,
-      totalMarkets: store.managedMarkets.length,
+      totalMarkets: store.discoveredMarkets.size,
     });
   }
 
@@ -551,7 +474,7 @@ class EngineManager {
       type: "system_status",
       wsConnected: this.wsFeed.connected,
       totalAccounts: this.engines.size,
-      totalMarkets: store.managedMarkets.length,
+      totalMarkets: store.discoveredMarkets.size,
     });
 
     // All account states
@@ -562,15 +485,8 @@ class EngineManager {
     // Account configs (without private keys)
     send({ type: "account_configs", configs: dbGetAllAccountMetas() });
 
-    // Managed markets
-    send({ type: "managed_markets", markets: store.managedMarkets });
-
-    // Overrides
-    send({
-      type: "overrides_update",
-      accountOverrides: store.accountOverrides,
-      marketOverrides: store.marketOverrides,
-    });
+    // Discovered markets
+    send({ type: "discovered_markets", markets: store.getDiscoveredMarketsList() });
 
     // Config
     send({ type: "config_update", config: store.config });
