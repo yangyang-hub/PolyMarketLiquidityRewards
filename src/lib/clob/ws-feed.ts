@@ -7,6 +7,7 @@ type OrderBookCallback = (tokenId: string, book: OrderBook) => void;
 
 const HEARTBEAT_INTERVAL = 30_000; // 30s protocol-level ping
 const STALE_TIMEOUT = 90_000; // 90s without any message → reconnect
+const RESUBSCRIBE_INTERVAL = 30_000; // 30s periodic re-subscribe for full snapshot refresh
 
 /**
  * Local book state for incremental updates.
@@ -27,6 +28,7 @@ export class ClobWsFeed {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private staleTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private resubscribeTimer: ReturnType<typeof setInterval> | null = null;
   private msgCount = 0;
 
   /** Local book state per token for applying incremental price_change deltas */
@@ -99,6 +101,7 @@ export class ClobWsFeed {
       }
 
       this.startHeartbeat();
+      this.startResubscribeTimer();
       this.resetStaleTimer();
     });
 
@@ -136,6 +139,7 @@ export class ClobWsFeed {
       this.connected = false;
       this.ws = null;
       this.stopHeartbeat();
+      this.stopResubscribeTimer();
       this.scheduleReconnect();
     });
   }
@@ -304,8 +308,27 @@ export class ClobWsFeed {
     }
   }
 
+  /** Periodically re-send subscription to force fresh book snapshots */
+  private startResubscribeTimer(): void {
+    this.stopResubscribeTimer();
+    this.resubscribeTimer = setInterval(() => {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN && this.subscribedTokens.size > 0) {
+        console.log(`[WsFeed] Re-subscribing ${this.subscribedTokens.size} tokens for snapshot refresh`);
+        this.sendMarketSubscription([...this.subscribedTokens]);
+      }
+    }, RESUBSCRIBE_INTERVAL);
+  }
+
+  private stopResubscribeTimer(): void {
+    if (this.resubscribeTimer) {
+      clearInterval(this.resubscribeTimer);
+      this.resubscribeTimer = null;
+    }
+  }
+
   private clearTimers(): void {
     this.stopHeartbeat();
+    this.stopResubscribeTimer();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

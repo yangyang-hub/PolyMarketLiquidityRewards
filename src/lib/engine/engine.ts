@@ -15,7 +15,8 @@ export class AccountEngine {
   private running = false;
   private periodicTimer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
-  private cancelling = false; // guard for realtimeCheck
+  private cancellingTokens: Set<string> = new Set(); // per-token guard
+  private realtimeCancelledIds: Set<string> = new Set(); // orders cancelled by realtimeCheck during tick
   private onEvent: (event: OrderEvent) => void;
   private onStateChange: (name: string, state: AccountState) => void;
   private onTokensDiscovered: (accountName: string, tokenIds: Set<string>) => void;
@@ -125,8 +126,8 @@ export class AccountEngine {
    * Only checks orders matching the updated tokenId.
    */
   private async realtimeCancelCheck(tokenId: string): Promise<void> {
-    if (this.cancelling) return;
-    this.cancelling = true;
+    if (this.cancellingTokens.has(tokenId)) return;
+    this.cancellingTokens.add(tokenId);
     try {
       const cancelDepthLevel = store.config.cancelDepthLevel;
       if (cancelDepthLevel === 0) return;
@@ -149,6 +150,7 @@ export class AccountEngine {
           console.log(`[Engine:${this.account.name}] Cancelling ${order.orderId} (realtime depth trigger, token=${tokenId.slice(0, 12)}...)`);
           const cancelled = await this.executor.cancelOrder(order.orderId);
           if (cancelled) {
+            this.realtimeCancelledIds.add(order.orderId);
             this.emitEvent("cancelled", {
               id: order.orderId,
               asset_id: order.tokenId,
@@ -171,7 +173,7 @@ export class AccountEngine {
     } catch (e: any) {
       console.error(`[Engine:${this.account.name}] Realtime check error:`, e.message);
     } finally {
-      this.cancelling = false;
+      this.cancellingTokens.delete(tokenId);
     }
   }
 
@@ -181,6 +183,7 @@ export class AccountEngine {
    */
   private async tick(): Promise<void> {
     const cancelDepthLevel = store.config.cancelDepthLevel;
+    this.realtimeCancelledIds.clear();
 
     // 1. Get all open orders from API
     const openOrders = await this.executor.getOpenOrders();
@@ -225,13 +228,14 @@ export class AccountEngine {
       }
     }
 
-    // 3. Notify manager of active tokenIds for subscription management
-    this.onTokensDiscovered(this.account.name, activeTokenIds);
-
-    // Update account state
+    // 3. Update account state BEFORE notifying manager,
+    //    so that when WS book snapshot triggers realtimeCancelCheck,
+    //    the cached orders are already in the store.
     const freshBalance = await this.executor.getCollateralBalance();
+    // Exclude orders that were cancelled by realtimeCancelCheck during this tick
+    const finalOrders = trackedOrders.filter((o) => !this.realtimeCancelledIds.has(o.orderId));
     const uniqueOrders = Array.from(
-      new Map(trackedOrders.map((o) => [o.orderId, o])).values(),
+      new Map(finalOrders.map((o) => [o.orderId, o])).values(),
     );
     const prev = store.accounts.get(this.account.name);
     const balanceChanged = prev?.balance !== freshBalance;
@@ -244,6 +248,10 @@ export class AccountEngine {
     if (balanceChanged || ordersChanged) {
       this.broadcastState();
     }
+
+    // 4. Notify manager of active tokenIds for subscription management.
+    //    Must happen AFTER store update so realtimeCancelCheck can find cached orders.
+    this.onTokensDiscovered(this.account.name, activeTokenIds);
   }
 
   private findSlugForToken(tokenId: string): string {

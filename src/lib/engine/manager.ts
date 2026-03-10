@@ -4,7 +4,6 @@ import type {
   AccountConfig,
   AccountState,
   DiscoveredMarket,
-  OrderBook,
   StrategyConfig,
   WsMessage,
 } from "../types";
@@ -24,7 +23,6 @@ import { fetchMarketsByTokenIds } from "../gamma/api";
 import { store } from "../store/memory-store";
 import { AccountEngine } from "./engine";
 import { ethers } from "ethers";
-import { getClobHost } from "../config";
 
 const ACCOUNT_NAME_RE = /^[a-zA-Z0-9_\-]{1,64}$/;
 
@@ -184,47 +182,61 @@ class EngineManager {
     if (newTokenIds.length > 0) {
       console.log(`[Manager] Subscribing to ${newTokenIds.length} new tokens`);
       this.wsFeed.subscribe(newTokenIds);
-      await this.fetchOrderbooks(newTokenIds);
+    }
 
-      // Trigger a tick on all running engines so they re-evaluate with fresh book data
-      for (const engine of this.engines.values()) {
-        if (engine.isRunning()) {
-          engine.onBookUpdate(newTokenIds[0]);
-        }
+    // Fetch market info from Gamma for tokens without discovered market
+    // (includes new tokens + previously failed lookups)
+    const unknownTokenIds = [...activeTokenIds].filter((id) => {
+      for (const market of store.discoveredMarkets.values()) {
+        if (market.tokens.some((t) => t.token_id === id)) return false;
       }
+      return true;
+    });
 
-      // Fetch market info from Gamma for unknown tokens
-      const unknownTokenIds = newTokenIds.filter((id) => {
-        // Check if this token is already part of a discovered market
-        for (const market of store.discoveredMarkets.values()) {
-          if (market.tokens.some((t) => t.token_id === id)) return false;
-        }
-        return true;
-      });
-
-      if (unknownTokenIds.length > 0) {
-        try {
-          const marketMap = await fetchMarketsByTokenIds(unknownTokenIds);
-          for (const [, info] of marketMap) {
-            if (!store.discoveredMarkets.has(info.condition_id)) {
-              const discovered: DiscoveredMarket = {
-                conditionId: info.condition_id,
-                slug: info.slug,
-                question: info.question,
-                tokens: info.tokens,
-              };
-              store.discoveredMarkets.set(info.condition_id, discovered);
-              console.log(`[Manager] Discovered market: ${info.question.slice(0, 60)}`);
-            }
+    if (unknownTokenIds.length > 0) {
+      try {
+        const marketMap = await fetchMarketsByTokenIds(unknownTokenIds);
+        for (const [, info] of marketMap) {
+          if (!store.discoveredMarkets.has(info.condition_id)) {
+            const discovered: DiscoveredMarket = {
+              conditionId: info.condition_id,
+              slug: info.slug,
+              question: info.question,
+              tokens: info.tokens,
+            };
+            store.discoveredMarkets.set(info.condition_id, discovered);
+            console.log(`[Manager] Discovered market: ${info.question.slice(0, 60)}`);
           }
-          // Broadcast updated market list
-          this.broadcast({
-            type: "discovered_markets",
-            markets: store.getDiscoveredMarketsList(),
-          });
-        } catch (e: any) {
-          console.error("[Manager] Failed to fetch market info:", e.message);
         }
+        // Broadcast updated market list
+        this.broadcast({
+          type: "discovered_markets",
+          markets: store.getDiscoveredMarketsList(),
+        });
+
+        // Backfill empty slugs in cached orders
+        for (const [name] of this.engines) {
+          const state = store.accounts.get(name);
+          if (!state || state.activeOrders.length === 0) continue;
+          let updated = false;
+          const patched = state.activeOrders.map((order) => {
+            if (order.marketSlug) return order;
+            for (const market of store.discoveredMarkets.values()) {
+              const match = market.tokens.find((t) => t.token_id === order.tokenId);
+              if (match) {
+                updated = true;
+                return { ...order, marketSlug: market.slug };
+              }
+            }
+            return order;
+          });
+          if (updated) {
+            store.updateAccount(name, { activeOrders: patched });
+            this.broadcast({ type: "account_state", name, state: store.accounts.get(name)! });
+          }
+        }
+      } catch (e: any) {
+        console.error("[Manager] Failed to fetch market info:", e.message);
       }
     }
 
@@ -500,56 +512,6 @@ class EngineManager {
         asks: book.asks.map((a) => ({ price: a.price.toNumber(), size: a.size.toNumber() })),
         timestamp: book.timestamp,
       });
-    }
-  }
-
-  private async fetchOrderbooks(tokenIds: string[]): Promise<void> {
-    const host = getClobHost();
-    console.log(`[Manager] Fetching orderbooks for ${tokenIds.length} tokens...`);
-
-    for (const tokenId of tokenIds) {
-      try {
-        const url = `${host}/book?token_id=${tokenId}`;
-        const resp = await fetch(url);
-        if (!resp.ok) {
-          console.error(`[Manager] Orderbook fetch HTTP ${resp.status} for ${tokenId.slice(0, 12)}...`);
-          continue;
-        }
-        const raw = await resp.json();
-        if (!raw || !raw.bids || !raw.asks) {
-          console.warn(`[Manager] Orderbook empty for ${tokenId.slice(0, 12)}...`);
-          continue;
-        }
-
-        const book: OrderBook = {
-          tokenId,
-          bids: raw.bids.map((b: any) => ({
-            price: new Decimal(b.price),
-            size: new Decimal(b.size),
-          })),
-          asks: raw.asks.map((a: any) => ({
-            price: new Decimal(a.price),
-            size: new Decimal(a.size),
-          })),
-          timestamp: Date.now(),
-        };
-        book.bids.sort((a, b) => b.price.minus(a.price).toNumber());
-        book.asks.sort((a, b) => a.price.minus(b.price).toNumber());
-        store.updateOrderBook(tokenId, book);
-
-        // Broadcast to connected browsers immediately
-        this.broadcast({
-          type: "orderbook_update",
-          tokenId,
-          bids: book.bids.map((b) => ({ price: b.price.toNumber(), size: b.size.toNumber() })),
-          asks: book.asks.map((a) => ({ price: a.price.toNumber(), size: a.size.toNumber() })),
-          timestamp: book.timestamp,
-        });
-
-        console.log(`[Manager] Orderbook ${tokenId.slice(0, 12)}... : ${book.bids.length} bids, ${book.asks.length} asks`);
-      } catch (e: any) {
-        console.error(`[Manager] Orderbook fetch failed for ${tokenId.slice(0, 12)}...:`, e.message);
-      }
     }
   }
 }
