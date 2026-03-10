@@ -21,8 +21,9 @@ export function shouldCancelDepthOrder(
   const shouldCancel = position <= cancelDepthLevel;
 
   if (shouldCancel) {
+    const topBids = book.bids.slice(0, 5).map((l) => `${l.price}×${l.size}`).join(", ");
     console.log(
-      `[DepthStrategy] token=${book.tokenId.slice(0, 12)}... price=${orderPrice} position=买${position} cancelDepth=${cancelDepthLevel} → CANCEL`,
+      `[DepthStrategy] CANCEL token=${book.tokenId.slice(0, 12)}... orderPrice=${orderPrice} position=买${position}/${book.bids.length}档 cancelDepth=${cancelDepthLevel} bids=[${topBids}]`,
     );
   }
 

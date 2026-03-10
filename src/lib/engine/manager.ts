@@ -233,7 +233,7 @@ class EngineManager {
       console.log(`[Manager] Unsubscribing ${goneTokenIds.length} gone tokens`);
       this.wsFeed.unsubscribe(goneTokenIds);
       for (const id of goneTokenIds) {
-        store.orderbooks.delete(id);
+        store.deleteOrderBook(id);
       }
 
       // Clean up discovered markets that no longer have any active tokens

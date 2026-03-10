@@ -16,7 +16,7 @@ class MemoryStore {
   config: StrategyConfig;
   accounts: Map<string, AccountState> = new Map();
   orderbooks: Map<string, OrderBook> = new Map(); // tokenId -> OrderBook
-  discoveredMarkets: Map<string, DiscoveredMarket> = new Map(); // conditionId -> DiscoveredMarket
+  discoveredMarkets: Map<string, DiscoveredMarket> = new Map();
   eventLog: OrderEvent[] = [];
 
   constructor() {
@@ -48,6 +48,10 @@ class MemoryStore {
 
   updateOrderBook(tokenId: string, book: OrderBook): void {
     this.orderbooks.set(tokenId, book);
+  }
+
+  deleteOrderBook(tokenId: string): void {
+    this.orderbooks.delete(tokenId);
   }
 
   addEvent(event: OrderEvent): void {

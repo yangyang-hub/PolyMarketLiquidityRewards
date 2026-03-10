@@ -52,6 +52,7 @@ export interface ActiveOrder {
   marketSlug: string;
   side: "buy" | "sell";
   price: number;
+  priceStr: string; // original string from CLOB API, for precise Decimal comparison
   size: number;
   status: "open" | "filled" | "cancelled";
   scoring: boolean;

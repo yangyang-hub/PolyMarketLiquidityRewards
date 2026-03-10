@@ -206,6 +206,7 @@ export class ClobWsFeed {
    * A size of "0" means the price level has been removed.
    */
   private handlePriceChangeEvent(event: any): void {
+    console.log(`[WsFeed] price_change:`, JSON.stringify(event));
     const changes: any[] = event.price_changes;
     if (!Array.isArray(changes) || changes.length === 0) return;
     const timestamp = Number(event.timestamp) || Date.now();

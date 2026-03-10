@@ -141,7 +141,7 @@ export class AccountEngine {
       if (ordersForToken.length === 0) return;
 
       for (const order of ordersForToken) {
-        const orderPrice = new Decimal(order.price);
+        const orderPrice = new Decimal(order.priceStr);
         const isBuy = order.side === "buy";
 
         if (shouldCancelDepthOrder(book, orderPrice, isBuy, cancelDepthLevel)) {
@@ -153,7 +153,7 @@ export class AccountEngine {
               id: order.orderId,
               asset_id: order.tokenId,
               side: order.side === "buy" ? "BUY" : "SELL",
-              price: String(order.price),
+              price: order.priceStr,
               original_size: String(order.size),
             }, slug);
 
@@ -266,6 +266,7 @@ export class AccountEngine {
       marketSlug: slug,
       side: order.side?.toUpperCase() === "BUY" ? "buy" : "sell",
       price: parseFloat(order.price),
+      priceStr: order.price,
       size: parseFloat(order.original_size),
       status: "open",
       scoring: scoringMap[order.id] === true,

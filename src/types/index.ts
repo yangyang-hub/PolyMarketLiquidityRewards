@@ -8,6 +8,7 @@ export interface ActiveOrder {
   marketSlug: string;
   side: "buy" | "sell";
   price: number;
+  priceStr: string;
   size: number;
   status: "open" | "filled" | "cancelled";
   scoring: boolean;
