@@ -4,12 +4,14 @@ import type {
   AccountState,
   ActiveOrder,
   OrderEvent,
+  OrderBook,
 } from "../types";
 import { ClobExecutor } from "../clob/executor";
 import { shouldCancelDepthOrder } from "../strategy/depth-strategy";
 import { store } from "../store/memory-store";
 
 export class AccountEngine {
+  private static NEW_ORDER_COOLDOWN_MS = 15_000;
   private account: AccountConfig;
   private executor: ClobExecutor;
   private running = false;
@@ -19,7 +21,7 @@ export class AccountEngine {
   private realtimeCancelledIds: Set<string> = new Set(); // orders cancelled by realtimeCheck during tick
   private onEvent: (event: OrderEvent) => void;
   private onStateChange: (name: string, state: AccountState) => void;
-  private onTokensDiscovered: (accountName: string, tokenIds: Set<string>) => void;
+  private onTokensDiscovered: (accountName: string, tokenIds: Set<string>) => Promise<void>;
 
   private static PERIODIC_MS = 15_000; // 15s full refresh
 
@@ -27,7 +29,7 @@ export class AccountEngine {
     account: AccountConfig,
     onEvent: (event: OrderEvent) => void,
     onStateChange: (name: string, state: AccountState) => void,
-    onTokensDiscovered: (accountName: string, tokenIds: Set<string>) => void,
+    onTokensDiscovered: (accountName: string, tokenIds: Set<string>) => Promise<void>,
   ) {
     this.account = account;
     this.executor = new ClobExecutor(account);
@@ -142,10 +144,13 @@ export class AccountEngine {
       if (ordersForToken.length === 0) return;
 
       for (const order of ordersForToken) {
+        if (!this.isOrderEligibleForCancel(order)) continue;
         const orderPrice = new Decimal(order.priceStr);
         const isBuy = order.side === "buy";
 
         if (shouldCancelDepthOrder(book, orderPrice, isBuy, cancelDepthLevel)) {
+          const confirmed = await this.confirmCancelWithRestBook(tokenId, orderPrice, isBuy);
+          if (!confirmed) continue;
           const slug = order.marketSlug || this.findSlugForToken(tokenId);
           console.log(`[Engine:${this.account.name}] Cancelling ${order.orderId} (realtime depth trigger, token=${tokenId.slice(0, 12)}...)`);
           const cancelled = await this.executor.cancelOrder(order.orderId);
@@ -184,6 +189,8 @@ export class AccountEngine {
   private async tick(): Promise<void> {
     const cancelDepthLevel = store.config.cancelDepthLevel;
     this.realtimeCancelledIds.clear();
+    const prev = store.accounts.get(this.account.name);
+    const previousOrderMap = new Map((prev?.activeOrders || []).map((o) => [o.orderId, o]));
 
     // 1. Get all open orders from API
     const openOrders = await this.executor.getOpenOrders();
@@ -213,18 +220,37 @@ export class AccountEngine {
         const shouldCancel = shouldCancelDepthOrder(book, orderPrice, isBuy, cancelDepthLevel);
 
         if (shouldCancel) {
-          console.log(`[Engine:${this.account.name}] Cancelling ${order.id} (tick depth trigger, token=${tokenId.slice(0, 12)}...)`);
-          const cancelled = await this.executor.cancelOrder(order.id);
-          if (cancelled) {
-            this.emitEvent("cancelled", order, slug);
+          const activeOrder = this.withPreservedTimestamp(
+            this.toActiveOrder(order, slug, scoringMap),
+            previousOrderMap,
+          );
+          if (!this.isOrderEligibleForCancel(activeOrder)) {
+            trackedOrders.push(activeOrder);
           } else {
-            trackedOrders.push(this.toActiveOrder(order, slug, scoringMap));
+            const confirmed = await this.confirmCancelWithRestBook(tokenId, orderPrice, isBuy);
+            if (confirmed) {
+              console.log(`[Engine:${this.account.name}] Cancelling ${order.id} (tick depth trigger, token=${tokenId.slice(0, 12)}...)`);
+              const cancelled = await this.executor.cancelOrder(order.id);
+              if (cancelled) {
+                this.emitEvent("cancelled", order, slug);
+              } else {
+                trackedOrders.push(activeOrder);
+              }
+            } else {
+              trackedOrders.push(activeOrder);
+            }
           }
         } else {
-          trackedOrders.push(this.toActiveOrder(order, slug, scoringMap));
+          trackedOrders.push(this.withPreservedTimestamp(
+            this.toActiveOrder(order, slug, scoringMap),
+            previousOrderMap,
+          ));
         }
       } else {
-        trackedOrders.push(this.toActiveOrder(order, slug, scoringMap));
+        trackedOrders.push(this.withPreservedTimestamp(
+          this.toActiveOrder(order, slug, scoringMap),
+          previousOrderMap,
+        ));
       }
     }
 
@@ -237,21 +263,45 @@ export class AccountEngine {
     const uniqueOrders = Array.from(
       new Map(finalOrders.map((o) => [o.orderId, o])).values(),
     );
-    const prev = store.accounts.get(this.account.name);
+    const mergedOrders = uniqueOrders.map((order) => {
+      const existing = previousOrderMap.get(order.orderId);
+      return existing ? { ...order, timestamp: existing.timestamp } : order;
+    });
     const balanceChanged = prev?.balance !== freshBalance;
-    const ordersChanged = prev?.activeOrders.length !== uniqueOrders.length;
+    const ordersChanged = !this.sameActiveOrders(prev?.activeOrders || [], mergedOrders);
+    const marketsChanged = prev?.marketsCount !== activeTokenIds.size;
     store.updateAccount(this.account.name, {
-      activeOrders: uniqueOrders,
+      activeOrders: mergedOrders,
       marketsCount: activeTokenIds.size,
       balance: freshBalance,
     });
-    if (balanceChanged || ordersChanged) {
+    if (balanceChanged || ordersChanged || marketsChanged) {
       this.broadcastState();
     }
 
     // 4. Notify manager of active tokenIds for subscription management.
     //    Must happen AFTER store update so realtimeCancelCheck can find cached orders.
-    this.onTokensDiscovered(this.account.name, activeTokenIds);
+    //    Await so Gamma API completes before we continue — discoveredMarkets will be populated.
+    await this.onTokensDiscovered(this.account.name, activeTokenIds);
+
+    // 5. Backfill empty slugs now that discoveredMarkets is populated
+    const currentState = store.accounts.get(this.account.name);
+    if (currentState) {
+      let slugPatched = false;
+      const patchedOrders = currentState.activeOrders.map((order) => {
+        if (order.marketSlug) return order;
+        const slug = this.findSlugForToken(order.tokenId);
+        if (slug) {
+          slugPatched = true;
+          return { ...order, marketSlug: slug };
+        }
+        return order;
+      });
+      if (slugPatched) {
+        store.updateAccount(this.account.name, { activeOrders: patchedOrders });
+        this.broadcastState();
+      }
+    }
   }
 
   private findSlugForToken(tokenId: string): string {
@@ -278,6 +328,92 @@ export class AccountEngine {
       size: parseFloat(order.original_size),
       status: "open",
       scoring: scoringMap[order.id] === true,
+      timestamp: Date.now(),
+    };
+  }
+
+  private isOrderEligibleForCancel(order: ActiveOrder): boolean {
+    return Date.now() - order.timestamp >= AccountEngine.NEW_ORDER_COOLDOWN_MS;
+  }
+
+  private withPreservedTimestamp(
+    order: ActiveOrder,
+    previousOrderMap: Map<string, ActiveOrder>,
+  ): ActiveOrder {
+    const existing = previousOrderMap.get(order.orderId);
+    return existing ? { ...order, timestamp: existing.timestamp } : order;
+  }
+
+  private sameActiveOrders(prev: ActiveOrder[], next: ActiveOrder[]): boolean {
+    if (prev.length !== next.length) return false;
+    for (let i = 0; i < prev.length; i++) {
+      const a = prev[i];
+      const b = next[i];
+      if (
+        a.orderId !== b.orderId ||
+        a.tokenId !== b.tokenId ||
+        a.marketSlug !== b.marketSlug ||
+        a.side !== b.side ||
+        a.price !== b.price ||
+        a.priceStr !== b.priceStr ||
+        a.size !== b.size ||
+        a.status !== b.status ||
+        a.scoring !== b.scoring ||
+        a.timestamp !== b.timestamp
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  private async confirmCancelWithRestBook(
+    tokenId: string,
+    orderPrice: Decimal,
+    isBuy: boolean,
+  ): Promise<boolean> {
+    const rawBook = await this.executor.getOrderBook(tokenId);
+    const restBook = this.normalizeRestBook(tokenId, rawBook);
+    if (!restBook) {
+      console.warn(
+        `[Engine:${this.account.name}] Skip cancel for ${tokenId.slice(0, 12)}...: REST book unavailable`,
+      );
+      return false;
+    }
+
+    return shouldCancelDepthOrder(
+      restBook,
+      orderPrice,
+      isBuy,
+      store.config.cancelDepthLevel,
+    );
+  }
+
+  private normalizeRestBook(tokenId: string, rawBook: any): OrderBook | null {
+    if (!rawBook || !Array.isArray(rawBook.bids) || !Array.isArray(rawBook.asks)) {
+      return null;
+    }
+
+    const bids = rawBook.bids
+      .map((level: any) => ({
+        price: new Decimal(level.price),
+        size: new Decimal(level.size),
+      }))
+      .filter((level: any) => level.size.greaterThan(0))
+      .sort((a: any, b: any) => b.price.minus(a.price).toNumber());
+
+    const asks = rawBook.asks
+      .map((level: any) => ({
+        price: new Decimal(level.price),
+        size: new Decimal(level.size),
+      }))
+      .filter((level: any) => level.size.greaterThan(0))
+      .sort((a: any, b: any) => a.price.minus(b.price).toNumber());
+
+    return {
+      tokenId,
+      bids,
+      asks,
       timestamp: Date.now(),
     };
   }

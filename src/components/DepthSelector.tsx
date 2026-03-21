@@ -1,6 +1,6 @@
 "use client";
 
-const levelLabels = ["中点", "1档", "2档", "3档", "4档", "5档"];
+const levelLabels = ["禁用", "1档", "2档", "3档", "4档", "5档"];
 
 export default function DepthSelector({
   label,

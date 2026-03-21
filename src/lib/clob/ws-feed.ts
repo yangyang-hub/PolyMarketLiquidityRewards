@@ -5,9 +5,9 @@ import { getClobWsHost } from "../config";
 
 type OrderBookCallback = (tokenId: string, book: OrderBook) => void;
 
-const HEARTBEAT_INTERVAL = 30_000; // 30s protocol-level ping
+const HEARTBEAT_INTERVAL = 10_000; // 10s text PING per Polymarket docs
 const STALE_TIMEOUT = 90_000; // 90s without any message → reconnect
-const RESUBSCRIBE_INTERVAL = 30_000; // 30s periodic re-subscribe for full snapshot refresh
+const SNAPSHOT_TIMEOUT = 15_000; // 15s without initial book snapshot → reconnect
 
 /**
  * Local book state for incremental updates.
@@ -16,6 +16,7 @@ const RESUBSCRIBE_INTERVAL = 30_000; // 30s periodic re-subscribe for full snaps
 interface LocalBook {
   bids: Map<string, Decimal>; // price string → size
   asks: Map<string, Decimal>; // price string → size
+  snapshotReady: boolean;
 }
 
 export class ClobWsFeed {
@@ -28,11 +29,12 @@ export class ClobWsFeed {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private staleTimer: ReturnType<typeof setTimeout> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  private resubscribeTimer: ReturnType<typeof setInterval> | null = null;
+  private snapshotTimer: ReturnType<typeof setInterval> | null = null;
   private msgCount = 0;
 
   /** Local book state per token for applying incremental price_change deltas */
   private localBooks: Map<string, LocalBook> = new Map();
+  private pendingSnapshotSince: Map<string, number> = new Map();
 
   public connected = false;
 
@@ -59,9 +61,10 @@ export class ClobWsFeed {
   subscribe(tokenIds: string[]): void {
     for (const id of tokenIds) {
       this.subscribedTokens.add(id);
+      this.pendingSnapshotSince.set(id, Date.now());
     }
     if (this.ws && this.ws.readyState === WebSocket.OPEN && tokenIds.length > 0) {
-      this.sendMarketSubscription(tokenIds);
+      this.sendSubscriptionOperation("subscribe", tokenIds);
     }
   }
 
@@ -69,6 +72,10 @@ export class ClobWsFeed {
     for (const id of tokenIds) {
       this.subscribedTokens.delete(id);
       this.localBooks.delete(id);
+      this.pendingSnapshotSince.delete(id);
+    }
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && tokenIds.length > 0) {
+      this.sendSubscriptionOperation("unsubscribe", tokenIds);
     }
   }
 
@@ -95,13 +102,16 @@ export class ClobWsFeed {
 
       // Subscribe to all tracked tokens
       if (this.subscribedTokens.size > 0) {
-        this.sendMarketSubscription([...this.subscribedTokens]);
+        for (const tokenId of this.subscribedTokens) {
+          this.pendingSnapshotSince.set(tokenId, Date.now());
+        }
+        this.sendInitialMarketSubscription([...this.subscribedTokens]);
       } else {
         console.log("[WsFeed] No tokens to subscribe");
       }
 
       this.startHeartbeat();
-      this.startResubscribeTimer();
+      this.startSnapshotTimer();
       this.resetStaleTimer();
     });
 
@@ -139,7 +149,7 @@ export class ClobWsFeed {
       this.connected = false;
       this.ws = null;
       this.stopHeartbeat();
-      this.stopResubscribeTimer();
+      this.stopSnapshotTimer();
       this.scheduleReconnect();
     });
   }
@@ -177,7 +187,7 @@ export class ClobWsFeed {
     if (!event.bids && !event.asks) return;
 
     // Build local book state from snapshot
-    const local: LocalBook = { bids: new Map(), asks: new Map() };
+    const local: LocalBook = { bids: new Map(), asks: new Map(), snapshotReady: true };
 
     for (const b of event.bids || []) {
       const size = new Decimal(b.size);
@@ -193,6 +203,7 @@ export class ClobWsFeed {
     }
 
     this.localBooks.set(tokenId, local);
+    this.pendingSnapshotSince.delete(tokenId);
 
     const book = this.buildOrderBook(tokenId, local, Number(event.timestamp) || Date.now());
 
@@ -210,7 +221,9 @@ export class ClobWsFeed {
    * A size of "0" means the price level has been removed.
    */
   private handlePriceChangeEvent(event: any): void {
-    console.log(`[WsFeed] price_change:`, JSON.stringify(event));
+    if (this.msgCount <= 20) {
+      console.log(`[WsFeed] price_change:`, JSON.stringify(event));
+    }
     const changes: any[] = event.price_changes;
     if (!Array.isArray(changes) || changes.length === 0) return;
     const timestamp = Number(event.timestamp) || Date.now();
@@ -222,11 +235,15 @@ export class ClobWsFeed {
       const tokenId = change.asset_id;
       if (!tokenId || !this.subscribedTokens.has(tokenId)) continue;
 
-      let local = this.localBooks.get(tokenId);
-      if (!local) {
-        // No snapshot yet for this token — create empty book
-        local = { bids: new Map(), asks: new Map() };
-        this.localBooks.set(tokenId, local);
+      const local = this.localBooks.get(tokenId);
+      if (!local || !local.snapshotReady) {
+        // Ignore incremental deltas until we have a full snapshot for this token.
+        if (this.msgCount <= 100) {
+          console.warn(
+            `[WsFeed] Ignoring price_change before snapshot for ${tokenId.slice(0, 12)}...`,
+          );
+        }
+        continue;
       }
 
       const price = change.price;
@@ -248,7 +265,8 @@ export class ClobWsFeed {
 
     // Emit updated books for all affected tokens
     for (const tokenId of changedTokens) {
-      const local = this.localBooks.get(tokenId)!;
+      const local = this.localBooks.get(tokenId);
+      if (!local || !local.snapshotReady) continue;
       const book = this.buildOrderBook(tokenId, local, timestamp);
       this.onUpdate(tokenId, book);
       this.updateCount++;
@@ -275,10 +293,9 @@ export class ClobWsFeed {
   }
 
   /**
-   * Send subscription message — same format for initial and dynamic subscriptions.
-   * Per official docs: {"assets_ids": [...], "type": "market", "custom_feature_enabled": true}
+   * Initial connection subscription payload.
    */
-  private sendMarketSubscription(tokenIds: string[]): void {
+  private sendInitialMarketSubscription(tokenIds: string[]): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
 
     const msg = {
@@ -287,16 +304,33 @@ export class ClobWsFeed {
       custom_feature_enabled: true,
     };
 
-    console.log(`[WsFeed] Subscribing to ${tokenIds.length} tokens:`, tokenIds.map(id => id.slice(0, 12) + "..."));
+    console.log(`[WsFeed] Initial subscribe ${tokenIds.length} tokens:`, tokenIds.map(id => id.slice(0, 12) + "..."));
     this.ws.send(JSON.stringify(msg));
   }
 
-  /** Use WebSocket protocol-level ping, NOT text "PING" */
+  /** Dynamic subscribe/unsubscribe payload after connection establishment. */
+  private sendSubscriptionOperation(
+    operation: "subscribe" | "unsubscribe",
+    tokenIds: string[],
+  ): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || tokenIds.length === 0) return;
+
+    const msg = {
+      assets_ids: tokenIds,
+      operation,
+      custom_feature_enabled: true,
+    };
+
+    console.log(`[WsFeed] ${operation} ${tokenIds.length} tokens:`, tokenIds.map(id => id.slice(0, 12) + "..."));
+    this.ws.send(JSON.stringify(msg));
+  }
+
+  /** Polymarket expects application-level text PING messages. */
   private startHeartbeat(): void {
     this.stopHeartbeat();
     this.heartbeatTimer = setInterval(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.ping();
+        this.ws.send("PING");
       }
     }, HEARTBEAT_INTERVAL);
   }
@@ -308,27 +342,35 @@ export class ClobWsFeed {
     }
   }
 
-  /** Periodically re-send subscription to force fresh book snapshots */
-  private startResubscribeTimer(): void {
-    this.stopResubscribeTimer();
-    this.resubscribeTimer = setInterval(() => {
-      if (this.ws && this.ws.readyState === WebSocket.OPEN && this.subscribedTokens.size > 0) {
-        console.log(`[WsFeed] Re-subscribing ${this.subscribedTokens.size} tokens for snapshot refresh`);
-        this.sendMarketSubscription([...this.subscribedTokens]);
+  /** Reconnect if any subscribed token never receives its initial book snapshot. */
+  private startSnapshotTimer(): void {
+    this.stopSnapshotTimer();
+    this.snapshotTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [tokenId, subscribedAt] of this.pendingSnapshotSince) {
+        if (!this.subscribedTokens.has(tokenId)) {
+          this.pendingSnapshotSince.delete(tokenId);
+          continue;
+        }
+        if (now - subscribedAt >= SNAPSHOT_TIMEOUT) {
+          console.warn(`[WsFeed] Snapshot timeout for ${tokenId.slice(0, 12)}..., forcing reconnect`);
+          this.forceReconnect();
+          return;
+        }
       }
-    }, RESUBSCRIBE_INTERVAL);
+    }, 5_000);
   }
 
-  private stopResubscribeTimer(): void {
-    if (this.resubscribeTimer) {
-      clearInterval(this.resubscribeTimer);
-      this.resubscribeTimer = null;
+  private stopSnapshotTimer(): void {
+    if (this.snapshotTimer) {
+      clearInterval(this.snapshotTimer);
+      this.snapshotTimer = null;
     }
   }
 
   private clearTimers(): void {
     this.stopHeartbeat();
-    this.stopResubscribeTimer();
+    this.stopSnapshotTimer();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -341,6 +383,7 @@ export class ClobWsFeed {
 
   private scheduleReconnect(): void {
     if (!this.running) return;
+    if (this.reconnectTimer) return;
 
     console.log(`[WsFeed] Reconnecting in ${this.backoff}ms...`);
     this.reconnectTimer = setTimeout(() => {
@@ -357,13 +400,18 @@ export class ClobWsFeed {
 
     this.staleTimer = setTimeout(() => {
       console.warn(`[WsFeed] Stale: no data for ${STALE_TIMEOUT / 1000}s (total msgs: ${this.msgCount}), forcing reconnect`);
-      this.connected = false;
-      this.stopHeartbeat();
-      if (this.ws) {
-        this.ws.close();
-        this.ws = null;
-      }
-      this.scheduleReconnect();
+      this.forceReconnect();
     }, STALE_TIMEOUT);
+  }
+
+  private forceReconnect(): void {
+    this.connected = false;
+    this.stopHeartbeat();
+    this.stopSnapshotTimer();
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+    this.scheduleReconnect();
   }
 }

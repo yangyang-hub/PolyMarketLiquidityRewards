@@ -26,6 +26,32 @@ function bookEqual(
   return true;
 }
 
+function activeOrdersEqual(
+  prev: AccountState["activeOrders"],
+  next: AccountState["activeOrders"],
+): boolean {
+  if (prev.length !== next.length) return false;
+  for (let i = 0; i < prev.length; i++) {
+    const a = prev[i];
+    const b = next[i];
+    if (
+      a.orderId !== b.orderId ||
+      a.tokenId !== b.tokenId ||
+      a.marketSlug !== b.marketSlug ||
+      a.side !== b.side ||
+      a.price !== b.price ||
+      a.priceStr !== b.priceStr ||
+      a.size !== b.size ||
+      a.status !== b.status ||
+      a.scoring !== b.scoring ||
+      a.timestamp !== b.timestamp
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 interface AppState {
   wsConnected: boolean;
   accounts: AccountState[];
@@ -97,9 +123,10 @@ export const useAppStore = create<AppState>((set) => ({
             if (
               prev.balance === msg.state.balance &&
               prev.status === msg.state.status &&
-              prev.activeOrders.length === msg.state.activeOrders.length &&
+              activeOrdersEqual(prev.activeOrders, msg.state.activeOrders) &&
               prev.marketsCount === msg.state.marketsCount &&
-              prev.error === msg.state.error
+              prev.error === msg.state.error &&
+              prev.address === msg.state.address
             ) {
               return {};
             }
