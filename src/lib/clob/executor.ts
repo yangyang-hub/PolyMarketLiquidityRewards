@@ -50,7 +50,7 @@ export function minCostAdjustedSize(price: Decimal): Decimal {
   const [sStep] = costPrecisionStep(price);
 
   const minS = new Decimal(100).dividedBy(price).ceil().toNumber();
-  let s = sStep === 0 ? minS : Math.ceil(minS / sStep) * sStep;
+  const s = sStep === 0 ? minS : Math.ceil(minS / sStep) * sStep;
 
   if (s > 5000) return new Decimal(0);
 
@@ -91,8 +91,8 @@ export class ClobExecutor {
         console.log(`[${this.accountName}] API key derived (${resp.apiKeys.length} keys exist)`);
         this.rebuildClient(creds);
       }
-    } catch (e: any) {
-      console.warn(`[${this.accountName}] initApiKeys primary path failed: ${e.message}, trying createOrDerive...`);
+    } catch (e: unknown) {
+      console.warn(`[${this.accountName}] initApiKeys primary path failed: ${errorMessage(e)}, trying createOrDerive...`);
       const creds = await this.client.createOrDeriveApiKey();
       console.log(`[${this.accountName}] API key createOrDerive succeeded`);
       this.rebuildClient(creds);
@@ -129,8 +129,8 @@ export class ClobExecutor {
         expiration: 0,
       }, undefined, OrderType.GTC, true);
       return resp?.orderID || resp?.id || null;
-    } catch (e: any) {
-      console.error(`[${this.accountName}] BUY failed:`, e.message);
+    } catch (e: unknown) {
+      console.error(`[${this.accountName}] BUY failed:`, errorMessage(e));
       return null;
     }
   }
@@ -165,8 +165,8 @@ export class ClobExecutor {
         expiration: 0,
       }, undefined, OrderType.GTC, true);
       return resp?.orderID || resp?.id || null;
-    } catch (e: any) {
-      console.error(`[${this.accountName}] SELL failed:`, e.message);
+    } catch (e: unknown) {
+      console.error(`[${this.accountName}] SELL failed:`, errorMessage(e));
       return null;
     }
   }
@@ -175,17 +175,19 @@ export class ClobExecutor {
     try {
       await this.client.cancelOrder({ orderID: orderId });
       return true;
-    } catch (e: any) {
-      console.error(`[${this.accountName}] cancel ${orderId} failed:`, e.message);
+    } catch (e: unknown) {
+      console.error(`[${this.accountName}] cancel ${orderId} failed:`, errorMessage(e));
       return false;
     }
   }
 
-  async cancelAll(): Promise<void> {
+  async cancelAll(): Promise<boolean> {
     try {
       await this.client.cancelAll();
-    } catch (e: any) {
-      console.error(`[${this.accountName}] cancelAll failed:`, e.message);
+      return true;
+    } catch (e: unknown) {
+      console.error(`[${this.accountName}] cancelAll failed:`, errorMessage(e));
+      return false;
     }
   }
 
@@ -193,13 +195,13 @@ export class ClobExecutor {
     try {
       const params = assetId ? { asset_id: assetId } : undefined;
       return (await this.client.getOpenOrders(params)) || [];
-    } catch (e: any) {
-      console.error(`[${this.accountName}] getOpenOrders failed:`, e.message);
+    } catch (e: unknown) {
+      console.error(`[${this.accountName}] getOpenOrders failed:`, errorMessage(e));
       return [];
     }
   }
 
-  async getOrderBook(tokenId: string): Promise<any> {
+  async getOrderBook(tokenId: string): Promise<unknown> {
     try {
       return await this.client.getOrderBook(tokenId);
     } catch {
@@ -211,8 +213,8 @@ export class ClobExecutor {
     if (orderIds.length === 0) return {};
     try {
       return (await this.client.areOrdersScoring({ orderIds })) || {};
-    } catch (e: any) {
-      console.error(`[${this.accountName}] areOrdersScoring failed:`, e.message);
+    } catch (e: unknown) {
+      console.error(`[${this.accountName}] areOrdersScoring failed:`, errorMessage(e));
       return {};
     }
   }
@@ -234,8 +236,8 @@ export class ClobExecutor {
       const balance = rawBalance / 1e6;
       console.log(`[${this.accountName}] balance=$${balance}`);
       return balance;
-    } catch (e: any) {
-      console.error(`[${this.accountName}] getBalance failed:`, e.message);
+    } catch (e: unknown) {
+      console.error(`[${this.accountName}] getBalance failed:`, errorMessage(e));
       return 0;
     }
   }
@@ -245,12 +247,16 @@ export class ClobExecutor {
     try {
       await this.client.updateBalanceAllowance({ asset_type: AssetType.COLLATERAL });
       console.log(`[${this.accountName}] Allowance cache refreshed`);
-    } catch (e: any) {
-      console.warn(`[${this.accountName}] refreshAllowanceCache failed:`, e.message);
+    } catch (e: unknown) {
+      console.warn(`[${this.accountName}] refreshAllowanceCache failed:`, errorMessage(e));
     }
   }
 
   getClient(): ClobClient {
     return this.client;
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

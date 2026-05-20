@@ -108,8 +108,8 @@ export async function fetchMarketsByTokenIds(tokenIds: string[]): Promise<Map<st
           }
         }
       }
-    } catch (e: any) {
-      console.error(`[GammaAPI] Batch fetch failed:`, e.message);
+    } catch (e: unknown) {
+      console.error(`[GammaAPI] Batch fetch failed:`, e instanceof Error ? e.message : String(e));
     }
   }
 

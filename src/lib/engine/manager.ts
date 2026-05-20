@@ -18,6 +18,7 @@ import {
   dbGetEnabledAccountNames,
 } from "../db/database";
 import { ClobWsFeed } from "../clob/ws-feed";
+import type { TradeUpdate } from "../clob/ws-feed";
 import { ClobExecutor } from "../clob/executor";
 import { fetchMarketsByTokenIds } from "../gamma/api";
 import { store } from "../store/memory-store";
@@ -37,22 +38,25 @@ class EngineManager {
   private allActiveTokenIds: Set<string> = new Set();
 
   constructor() {
-    this.wsFeed = new ClobWsFeed((tokenId, book) => {
-      store.updateOrderBook(tokenId, book);
-      this.broadcast({
-        type: "orderbook_update",
-        tokenId,
-        bids: book.bids.map((b) => ({ price: b.price.toNumber(), size: b.size.toNumber() })),
-        asks: book.asks.map((a) => ({ price: a.price.toNumber(), size: a.size.toNumber() })),
-        timestamp: book.timestamp,
-      });
-      // Notify all running engines of the book update
-      for (const engine of this.engines.values()) {
-        if (engine.isRunning()) {
-          engine.onBookUpdate(tokenId);
+    this.wsFeed = new ClobWsFeed(
+      (tokenId, book) => {
+        store.updateOrderBook(tokenId, book);
+        this.broadcast({
+          type: "orderbook_update",
+          tokenId,
+          bids: book.bids.map((b) => ({ price: b.price.toNumber(), size: b.size.toNumber() })),
+          asks: book.asks.map((a) => ({ price: a.price.toNumber(), size: a.size.toNumber() })),
+          timestamp: book.timestamp,
+        });
+        // Notify all running engines of the book update
+        for (const engine of this.engines.values()) {
+          if (engine.isRunning()) {
+            engine.onBookUpdate(tokenId);
+          }
         }
-      }
-    });
+      },
+      (trade) => this.handleTradeUpdate(trade),
+    );
   }
 
   async initialize(): Promise<void> {
@@ -83,8 +87,8 @@ class EngineManager {
         this.broadcast({ type: "account_state", name: acc.name, state: store.accounts.get(acc.name)! });
         // Trigger CLOB server to refresh its cached allowance
         await executor.refreshAllowanceCache();
-      }).catch((e: any) => {
-        console.error(`[Manager] Failed to fetch balance for ${acc.name}:`, e.message);
+      }).catch((e: unknown) => {
+        console.error(`[Manager] Failed to fetch balance for ${acc.name}:`, this.errorMessage(e));
       });
     }
 
@@ -114,8 +118,8 @@ class EngineManager {
         try {
           await this.startAccount(name);
           console.log(`[Manager] Auto-started: ${name}`);
-        } catch (e: any) {
-          console.error(`[Manager] Failed to auto-start ${name}:`, e.message);
+        } catch (e: unknown) {
+          console.error(`[Manager] Failed to auto-start ${name}:`, this.errorMessage(e));
           dbSetAccountEnabled(name, false);
         }
       }
@@ -235,8 +239,8 @@ class EngineManager {
             this.broadcast({ type: "account_state", name, state: store.accounts.get(name)! });
           }
         }
-      } catch (e: any) {
-        console.error("[Manager] Failed to fetch market info:", e.message);
+      } catch (e: unknown) {
+        console.error("[Manager] Failed to fetch market info:", this.errorMessage(e));
       }
     }
 
@@ -303,8 +307,8 @@ class EngineManager {
       console.log(`[Manager] ${name} balance: $${balance}`);
       store.updateAccount(name, { balance });
       this.broadcast({ type: "account_state", name, state: store.accounts.get(name)! });
-    }).catch((e: any) => {
-      console.error(`[Manager] Failed to fetch balance for ${name}:`, e.message);
+    }).catch((e: unknown) => {
+      console.error(`[Manager] Failed to fetch balance for ${name}:`, this.errorMessage(e));
     });
 
     // Broadcast
@@ -366,7 +370,12 @@ class EngineManager {
   async startAccount(name: string): Promise<boolean> {
     const engine = this.engines.get(name);
     if (!engine) return false;
-    await engine.start();
+    const started = await engine.start();
+    if (!started) {
+      dbSetAccountEnabled(name, false);
+      this.broadcastSystemStatus();
+      return false;
+    }
     dbSetAccountEnabled(name, true);
     this.broadcastSystemStatus();
     return true;
@@ -413,7 +422,8 @@ class EngineManager {
   async cancelAllOrders(accountName: string): Promise<boolean> {
     const engine = this.engines.get(accountName);
     if (!engine) return false;
-    await engine.cancelAllOrders();
+    const ok = await engine.cancelAllOrders();
+    if (!ok) return false;
     store.updateAccount(accountName, { activeOrders: [] });
     this.broadcast({ type: "account_state", name: accountName, state: store.accounts.get(accountName)! });
     return true;
@@ -513,6 +523,18 @@ class EngineManager {
         timestamp: book.timestamp,
       });
     }
+  }
+
+  private handleTradeUpdate(trade: TradeUpdate): void {
+    for (const engine of this.engines.values()) {
+      if (engine.isRunning()) {
+        engine.onTrade(trade);
+      }
+    }
+  }
+
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 }
 

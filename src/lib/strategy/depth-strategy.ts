@@ -69,20 +69,6 @@ export function shouldCancelMinBookNotional(
   return shouldCancel;
 }
 
-export function askReductionNotional(prev: OrderBook, next: OrderBook): Decimal {
-  const nextAskSizeByPrice = new Map(next.asks.map((level) => [level.price.toString(), level.size]));
-  let total = ZERO;
-
-  for (const prevLevel of prev.asks) {
-    const nextSize = nextAskSizeByPrice.get(prevLevel.price.toString()) ?? ZERO;
-    if (prevLevel.size.greaterThan(nextSize)) {
-      total = total.plus(prevLevel.price.times(prevLevel.size.minus(nextSize)));
-    }
-  }
-
-  return total;
-}
-
 function sumNotional(levels: { price: Decimal; size: Decimal }[]): Decimal {
   let total = ZERO;
   for (const level of levels) {

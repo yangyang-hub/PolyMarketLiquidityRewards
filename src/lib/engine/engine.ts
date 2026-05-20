@@ -1,4 +1,5 @@
 import Decimal from "decimal.js";
+import type { OpenOrder } from "@polymarket/clob-client-v2";
 import type {
   AccountConfig,
   AccountState,
@@ -7,8 +8,8 @@ import type {
   OrderBook,
 } from "../types";
 import { ClobExecutor } from "../clob/executor";
+import type { TradeUpdate } from "../clob/ws-feed";
 import {
-  askReductionNotional,
   protectedBidNotional,
   shouldCancelDepthOrder,
   shouldCancelMinBookNotional,
@@ -41,6 +42,29 @@ interface CancelTrigger {
 interface ResetOrderResult {
   didReset: boolean;
   replacement?: ActiveOrder;
+}
+
+type OrderValue = Decimal.Value;
+
+interface RawOrderLike {
+  id: string;
+  asset_id: string;
+  side?: string;
+  price: OrderValue;
+  original_size?: OrderValue;
+  size?: OrderValue;
+  size_matched?: OrderValue;
+  matched_size?: OrderValue;
+}
+
+interface RawRestBook {
+  bids?: RawBookLevel[];
+  asks?: RawBookLevel[];
+}
+
+interface RawBookLevel {
+  price: OrderValue;
+  size: OrderValue;
 }
 
 export class AccountEngine {
@@ -76,8 +100,8 @@ export class AccountEngine {
     this.onTokensDiscovered = onTokensDiscovered;
   }
 
-  async start(): Promise<void> {
-    if (this.running) return;
+  async start(): Promise<boolean> {
+    if (this.running) return true;
     this.running = true;
 
     console.log(`[Engine:${this.account.name}] Starting...`);
@@ -97,16 +121,26 @@ export class AccountEngine {
         this.ticking = true;
         try {
           await this.tick();
-        } catch (e: any) {
-          console.error(`[Engine:${this.account.name}] Periodic tick error:`, e.message);
+        } catch (e: unknown) {
+          console.error(`[Engine:${this.account.name}] Periodic tick error:`, this.errorMessage(e));
+        } finally {
+          this.ticking = false;
         }
-        this.ticking = false;
       }, AccountEngine.PERIODIC_MS);
-    } catch (e: any) {
-      console.error(`[Engine:${this.account.name}] Init failed:`, e.message);
-      store.updateAccount(this.account.name, { status: "error", error: e.message });
+
+      return true;
+    } catch (e: unknown) {
+      const message = this.errorMessage(e);
+      console.error(`[Engine:${this.account.name}] Init failed:`, message);
+      store.updateAccount(this.account.name, { status: "error", error: message });
       this.broadcastState();
       this.running = false;
+      this.ticking = false;
+      if (this.periodicTimer) {
+        clearInterval(this.periodicTimer);
+        this.periodicTimer = null;
+      }
+      return false;
     }
   }
 
@@ -139,8 +173,8 @@ export class AccountEngine {
   }
 
   /** Cancel all open orders for this account */
-  async cancelAllOrders(): Promise<void> {
-    await this.executor.cancelAll();
+  async cancelAllOrders(): Promise<boolean> {
+    return this.executor.cancelAll();
   }
 
   /**
@@ -160,8 +194,8 @@ export class AccountEngine {
   private async discover(): Promise<void> {
     try {
       await this.tick();
-    } catch (e: any) {
-      console.error(`[Engine:${this.account.name}] Discover error:`, e.message);
+    } catch (e: unknown) {
+      console.error(`[Engine:${this.account.name}] Discover error:`, this.errorMessage(e));
     }
   }
 
@@ -207,11 +241,27 @@ export class AccountEngine {
           }
         }
       }
-    } catch (e: any) {
-      console.error(`[Engine:${this.account.name}] Realtime check error:`, e.message);
+    } catch (e: unknown) {
+      console.error(`[Engine:${this.account.name}] Realtime check error:`, this.errorMessage(e));
     } finally {
       this.cancellingTokens.delete(tokenId);
     }
+  }
+
+  onTrade(trade: TradeUpdate): void {
+    if (!this.running || trade.side !== "BUY") return;
+
+    const now = Date.now();
+    const timestamp = Number.isFinite(trade.timestamp) ? trade.timestamp : now;
+    const samples = this.buyPressureHistory.get(trade.tokenId) || [];
+    samples.push({
+      timestamp,
+      notional: trade.price.times(trade.size),
+    });
+    this.buyPressureHistory.set(
+      trade.tokenId,
+      samples.filter((sample) => now - sample.timestamp <= AccountEngine.HISTORY_RETENTION_MS),
+    );
   }
 
   /**
@@ -353,7 +403,7 @@ export class AccountEngine {
   }
 
   private toActiveOrder(
-    order: any,
+    order: OpenOrder,
     slug: string,
     scoringMap: Record<string, boolean>,
   ): ActiveOrder {
@@ -362,9 +412,9 @@ export class AccountEngine {
       tokenId: order.asset_id,
       marketSlug: slug,
       side: order.side?.toUpperCase() === "BUY" ? "buy" : "sell",
-      price: parseFloat(order.price),
-      priceStr: order.price,
-      size: parseFloat(order.original_size || order.size || "0"),
+      price: parseFloat(String(order.price)),
+      priceStr: String(order.price),
+      size: parseFloat(String(order.original_size || "0")),
       status: "open",
       scoring: scoringMap[order.id] === true,
       timestamp: Date.now(),
@@ -408,20 +458,6 @@ export class AccountEngine {
 
   private recordBookUpdate(tokenId: string, book: OrderBook): void {
     const now = Date.now();
-    const previous = this.latestBooks.get(tokenId);
-
-    if (previous) {
-      const buyPressure = askReductionNotional(previous, book);
-      if (buyPressure.greaterThan(0)) {
-        const pressureSamples = this.buyPressureHistory.get(tokenId) || [];
-        pressureSamples.push({ timestamp: now, notional: buyPressure });
-        this.buyPressureHistory.set(
-          tokenId,
-          pressureSamples.filter((sample) => now - sample.timestamp <= AccountEngine.HISTORY_RETENTION_MS),
-        );
-      }
-    }
-
     this.latestBooks.set(tokenId, book);
 
     const samples = this.bookHistory.get(tokenId) || [];
@@ -454,6 +490,7 @@ export class AccountEngine {
       return {
         code: "depth_position",
         label: `买单进入前 ${config.cancelDepthLevel} 档`,
+        bypassCooldown: true,
         requiresRestConfirmation: true,
       };
     }
@@ -473,7 +510,7 @@ export class AccountEngine {
       if (buyPressure.greaterThanOrEqualTo(config.buyPressureUsd)) {
         return {
           code: "buy_pressure",
-          label: `${config.buyPressureWindowSec}s 推断买入吃单 $${buyPressure.toDecimalPlaces(2)}`,
+          label: `${config.buyPressureWindowSec}s 买入成交 $${buyPressure.toDecimalPlaces(2)}`,
         };
       }
     }
@@ -618,7 +655,7 @@ export class AccountEngine {
   }
 
   private async cancelRawOrder(
-    rawOrder: any,
+    rawOrder: RawOrderLike,
     activeOrder: ActiveOrder,
     trigger: CancelTrigger,
     source: "realtime" | "tick",
@@ -638,7 +675,7 @@ export class AccountEngine {
   }
 
   private async tryResetOrder(
-    rawOrder: any,
+    rawOrder: RawOrderLike,
     activeOrder: ActiveOrder,
     slug: string,
   ): Promise<ResetOrderResult> {
@@ -720,7 +757,7 @@ export class AccountEngine {
     return min + Math.floor(Math.random() * (max - min + 1));
   }
 
-  private getRemainingOrderSize(rawOrder: any, activeOrder: ActiveOrder): Decimal {
+  private getRemainingOrderSize(rawOrder: RawOrderLike, activeOrder: ActiveOrder): Decimal {
     const original = this.safeDecimal(rawOrder.original_size ?? rawOrder.size, activeOrder.size);
     const matched = this.safeDecimal(rawOrder.size_matched ?? rawOrder.matched_size, 0);
     const remaining = original.minus(matched);
@@ -730,7 +767,7 @@ export class AccountEngine {
   private safeDecimal(value: unknown, fallback: number): Decimal {
     try {
       if (value == null || value === "") return new Decimal(fallback);
-      return new Decimal(value as any);
+      return new Decimal(value as Decimal.Value);
     } catch {
       return new Decimal(fallback);
     }
@@ -745,26 +782,26 @@ export class AccountEngine {
     }
   }
 
-  private normalizeRestBook(tokenId: string, rawBook: any): OrderBook | null {
-    if (!rawBook || !Array.isArray(rawBook.bids) || !Array.isArray(rawBook.asks)) {
+  private normalizeRestBook(tokenId: string, rawBook: unknown): OrderBook | null {
+    if (!this.isRawRestBook(rawBook)) {
       return null;
     }
 
     const bids = rawBook.bids
-      .map((level: any) => ({
+      .map((level) => ({
         price: new Decimal(level.price),
         size: new Decimal(level.size),
       }))
-      .filter((level: any) => level.size.greaterThan(0))
-      .sort((a: any, b: any) => b.price.minus(a.price).toNumber());
+      .filter((level) => level.size.greaterThan(0))
+      .sort((a, b) => b.price.minus(a.price).toNumber());
 
     const asks = rawBook.asks
-      .map((level: any) => ({
+      .map((level) => ({
         price: new Decimal(level.price),
         size: new Decimal(level.size),
       }))
-      .filter((level: any) => level.size.greaterThan(0))
-      .sort((a: any, b: any) => a.price.minus(b.price).toNumber());
+      .filter((level) => level.size.greaterThan(0))
+      .sort((a, b) => a.price.minus(b.price).toNumber());
 
     return {
       tokenId,
@@ -774,7 +811,13 @@ export class AccountEngine {
     };
   }
 
-  private emitEvent(type: OrderEvent["type"], order: any, slug: string, reason?: string): void {
+  private isRawRestBook(rawBook: unknown): rawBook is Required<RawRestBook> {
+    if (!rawBook || typeof rawBook !== "object") return false;
+    const candidate = rawBook as RawRestBook;
+    return Array.isArray(candidate.bids) && Array.isArray(candidate.asks);
+  }
+
+  private emitEvent(type: OrderEvent["type"], order: RawOrderLike, slug: string, reason?: string): void {
     const event: OrderEvent = {
       type,
       accountName: this.account.name,
@@ -782,8 +825,8 @@ export class AccountEngine {
       tokenId: order.asset_id,
       marketSlug: slug,
       side: order.side?.toUpperCase() === "BUY" ? "buy" : "sell",
-      price: parseFloat(order.price),
-      size: parseFloat(order.original_size || order.size || "0"),
+      price: parseFloat(String(order.price)),
+      size: parseFloat(String(order.original_size || order.size || "0")),
       timestamp: Date.now(),
       reason,
     };
@@ -796,5 +839,9 @@ export class AccountEngine {
     if (state) {
       this.onStateChange(this.account.name, state);
     }
+  }
+
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 }

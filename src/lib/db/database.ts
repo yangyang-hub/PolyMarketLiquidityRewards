@@ -14,6 +14,29 @@ const DB_PATH = path.join(getDataDir(), "app.db");
 
 const g = globalThis as typeof globalThis & { __appDb?: Database.Database };
 
+interface AccountRow {
+  name: string;
+  encrypted_key: string;
+  iv: string;
+  auth_tag: string;
+  signature_type: number;
+  proxy_wallet: string | null;
+}
+
+interface AccountMetaRow {
+  name: string;
+  signature_type: number;
+  proxy_wallet: string | null;
+}
+
+function setConfigEntry<K extends keyof StrategyConfig>(
+  cfg: StrategyConfig,
+  key: K,
+  value: StrategyConfig[K],
+): void {
+  cfg[key] = value;
+}
+
 function getDb(): Database.Database {
   if (g.__appDb) return g.__appDb;
 
@@ -102,7 +125,7 @@ export function dbDeleteAccount(name: string): void {
 export function dbGetAllAccountConfigs(): AccountConfig[] {
   const rows = getDb()
     .prepare("SELECT * FROM accounts ORDER BY created_at")
-    .all() as any[];
+    .all() as AccountRow[];
   return rows.map((row) => ({
     name: row.name,
     privateKey: decryptPrivateKey(row.encrypted_key, row.iv, row.auth_tag),
@@ -114,7 +137,7 @@ export function dbGetAllAccountConfigs(): AccountConfig[] {
 export function dbGetAccountConfig(name: string): AccountConfig | undefined {
   const row = getDb()
     .prepare("SELECT * FROM accounts WHERE name = ?")
-    .get(name) as any;
+    .get(name) as AccountRow | undefined;
   if (!row) return undefined;
   return {
     name: row.name,
@@ -127,7 +150,7 @@ export function dbGetAccountConfig(name: string): AccountConfig | undefined {
 export function dbGetAllAccountMetas(): AccountMeta[] {
   const rows = getDb()
     .prepare("SELECT name, signature_type, proxy_wallet FROM accounts ORDER BY created_at")
-    .all() as any[];
+    .all() as AccountMetaRow[];
   return rows.map((row) => ({
     name: row.name,
     signatureType: row.signature_type,
@@ -163,11 +186,11 @@ export function dbLoadStrategyConfig(): StrategyConfig {
     if (raw == null) continue;
     const fallback = cfg[key];
     if (typeof fallback === "boolean") {
-      (cfg as any)[key] = raw === "true" || raw === "1";
+      setConfigEntry(cfg, key, (raw === "true" || raw === "1") as StrategyConfig[typeof key]);
     } else {
       const n = Number(raw);
       if (Number.isFinite(n)) {
-        (cfg as any)[key] = n;
+        setConfigEntry(cfg, key, n as StrategyConfig[typeof key]);
       }
     }
   }

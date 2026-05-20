@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { engineManager } from "@/lib/engine/manager";
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function PUT(
   request: Request,
   { params }: { params: Promise<{ name: string }> },
@@ -18,8 +22,8 @@ export async function PUT(
     );
 
     return NextResponse.json({ ok: true });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 400 });
+  } catch (e: unknown) {
+    return NextResponse.json({ error: errorMessage(e) }, { status: 400 });
   }
 }
 
@@ -31,7 +35,7 @@ export async function DELETE(
     const { name } = await params;
     await engineManager.removeAccount(name);
     return NextResponse.json({ ok: true });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 400 });
+  } catch (e: unknown) {
+    return NextResponse.json({ error: errorMessage(e) }, { status: 400 });
   }
 }

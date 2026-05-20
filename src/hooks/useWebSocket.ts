@@ -16,7 +16,10 @@ export function useWebSocket(onMessage: (msg: WsMessage) => void) {
   // needing to include it in the useEffect dependency array.
   // This prevents the WebSocket from reconnecting on re-renders.
   const onMessageRef = useRef(onMessage);
-  onMessageRef.current = onMessage;
+
+  useEffect(() => {
+    onMessageRef.current = onMessage;
+  }, [onMessage]);
 
   useEffect(() => {
     let alive = true;

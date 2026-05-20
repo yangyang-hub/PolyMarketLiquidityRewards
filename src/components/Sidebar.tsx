@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -34,10 +35,15 @@ export default function Sidebar() {
     <aside className="terminal-sidebar hidden flex-col py-4 md:flex">
       <div className="px-5 pb-6">
         <div className="mb-4 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--terminal-panel-high)] text-[var(--terminal-muted)]">
-            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-            </svg>
+          <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-[var(--terminal-panel-high)]">
+            <Image
+              src="/logo.png"
+              alt="流动性风控终端"
+              width={40}
+              height={40}
+              priority
+              className="h-full w-full object-cover"
+            />
           </div>
           <div className="min-w-0">
             <div className="truncate text-[18px] font-bold text-[var(--terminal-primary-text)]">

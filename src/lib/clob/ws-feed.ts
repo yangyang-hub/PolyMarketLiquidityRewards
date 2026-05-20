@@ -4,6 +4,56 @@ import type { OrderBook, PriceLevel } from "../types";
 import { getClobWsHost } from "../config";
 
 type OrderBookCallback = (tokenId: string, book: OrderBook) => void;
+type TradeCallback = (trade: TradeUpdate) => void;
+
+export interface TradeUpdate {
+  tokenId: string;
+  side: "BUY" | "SELL";
+  price: Decimal;
+  size: Decimal;
+  timestamp: number;
+}
+
+interface PriceLevelPayload {
+  price: string;
+  size: string;
+}
+
+interface BookEventPayload {
+  event_type: "book";
+  asset_id?: string;
+  bids?: PriceLevelPayload[];
+  asks?: PriceLevelPayload[];
+  timestamp?: string | number;
+}
+
+interface PriceChangePayload {
+  asset_id?: string;
+  price?: string;
+  size?: string;
+  side?: string;
+}
+
+interface PriceChangeEventPayload {
+  event_type: "price_change";
+  price_changes?: PriceChangePayload[];
+  timestamp?: string | number;
+}
+
+interface LastTradePriceEventPayload {
+  event_type: "last_trade_price";
+  asset_id?: string;
+  side?: string;
+  price?: string;
+  size?: string;
+  timestamp?: string | number;
+}
+
+type MarketEventPayload =
+  | BookEventPayload
+  | PriceChangeEventPayload
+  | LastTradePriceEventPayload
+  | { event_type?: string };
 
 const HEARTBEAT_INTERVAL = 10_000; // 10s text PING per Polymarket docs
 const STALE_TIMEOUT = 90_000; // 90s without any message → reconnect
@@ -23,6 +73,7 @@ export class ClobWsFeed {
   private ws: WebSocket | null = null;
   private subscribedTokens: Set<string> = new Set();
   private onUpdate: OrderBookCallback;
+  private onTrade?: TradeCallback;
   private running = false;
   private backoff = 1000;
   private maxBackoff = 60000;
@@ -38,8 +89,9 @@ export class ClobWsFeed {
 
   public connected = false;
 
-  constructor(onUpdate: OrderBookCallback) {
+  constructor(onUpdate: OrderBookCallback, onTrade?: TradeCallback) {
     this.onUpdate = onUpdate;
+    this.onTrade = onTrade;
   }
 
   start(): void {
@@ -89,8 +141,9 @@ export class ClobWsFeed {
 
     try {
       this.ws = new WebSocket(url);
-    } catch (e: any) {
-      console.error(`[WsFeed] Connection error:`, e.message);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.error(`[WsFeed] Connection error:`, message);
       this.scheduleReconnect();
       return;
     }
@@ -157,11 +210,13 @@ export class ClobWsFeed {
   /** Count of orderbook updates emitted to callback (for diagnostics) */
   public updateCount = 0;
 
-  private handleMessage(msg: any): void {
+  private handleMessage(msg: unknown): void {
     const events = Array.isArray(msg) ? msg : [msg];
 
     for (const event of events) {
-      const eventType = event.event_type;
+      if (!event || typeof event !== "object") continue;
+      const payload = event as MarketEventPayload;
+      const eventType = payload.event_type;
 
       // Log event types for the first 20 messages to aid debugging
       if (this.msgCount <= 20) {
@@ -169,11 +224,13 @@ export class ClobWsFeed {
       }
 
       if (eventType === "book") {
-        this.handleBookEvent(event);
+        this.handleBookEvent(payload as BookEventPayload);
       } else if (eventType === "price_change") {
-        this.handlePriceChangeEvent(event);
+        this.handlePriceChangeEvent(payload as PriceChangeEventPayload);
+      } else if (eventType === "last_trade_price") {
+        this.handleLastTradePriceEvent(payload as LastTradePriceEventPayload);
       }
-      // Ignore other event types (tick_size_change, last_trade_price, best_bid_ask, etc.)
+      // Ignore other event types (tick_size_change, best_bid_ask, etc.)
     }
   }
 
@@ -181,7 +238,7 @@ export class ClobWsFeed {
    * Handle full orderbook snapshot ("book" event).
    * Replaces the entire local book state for this token.
    */
-  private handleBookEvent(event: any): void {
+  private handleBookEvent(event: BookEventPayload): void {
     const tokenId = event.asset_id;
     if (!tokenId || !this.subscribedTokens.has(tokenId)) return;
     if (!event.bids && !event.asks) return;
@@ -220,11 +277,11 @@ export class ClobWsFeed {
    * Format: { market, price_changes: [{ asset_id, price, size, side, ... }], timestamp, event_type }
    * A size of "0" means the price level has been removed.
    */
-  private handlePriceChangeEvent(event: any): void {
+  private handlePriceChangeEvent(event: PriceChangeEventPayload): void {
     if (this.msgCount <= 20) {
       console.log(`[WsFeed] price_change:`, JSON.stringify(event));
     }
-    const changes: any[] = event.price_changes;
+    const changes = event.price_changes;
     if (!Array.isArray(changes) || changes.length === 0) return;
     const timestamp = Number(event.timestamp) || Date.now();
 
@@ -247,8 +304,10 @@ export class ClobWsFeed {
       }
 
       const price = change.price;
+      if (!price || change.size == null) continue;
       const size = new Decimal(change.size);
       const side: string = (change.side || "").toUpperCase();
+      if (side !== "BUY" && side !== "SELL") continue;
 
       const map = side === "BUY" ? local.bids : local.asks;
 
@@ -271,6 +330,23 @@ export class ClobWsFeed {
       this.onUpdate(tokenId, book);
       this.updateCount++;
     }
+  }
+
+  private handleLastTradePriceEvent(event: LastTradePriceEventPayload): void {
+    const tokenId = event.asset_id;
+    if (!tokenId || !this.subscribedTokens.has(tokenId)) return;
+    if (!event.price || !event.size) return;
+
+    const side = (event.side || "").toUpperCase();
+    if (side !== "BUY" && side !== "SELL") return;
+
+    this.onTrade?.({
+      tokenId,
+      side,
+      price: new Decimal(event.price),
+      size: new Decimal(event.size),
+      timestamp: Number(event.timestamp) || Date.now(),
+    });
   }
 
   /**

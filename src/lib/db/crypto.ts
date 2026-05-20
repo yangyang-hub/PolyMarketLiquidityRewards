@@ -31,8 +31,8 @@ export function getEncryptionKey(): Buffer {
     cachedKey = crypto.randomBytes(32);
     try {
       fs.writeFileSync(KEY_FILE, cachedKey.toString("hex"), { mode: 0o600, flag: "wx" });
-    } catch (e: any) {
-      if (e.code === "EEXIST") {
+    } catch (e: unknown) {
+      if (hasErrorCode(e, "EEXIST")) {
         // Another process created the file between our existsSync and writeFileSync
         cachedKey = Buffer.from(fs.readFileSync(KEY_FILE, "utf-8").trim(), "hex");
       } else {
@@ -42,6 +42,15 @@ export function getEncryptionKey(): Buffer {
   }
 
   return cachedKey;
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === code
+  );
 }
 
 export function encryptPrivateKey(plaintext: string): {

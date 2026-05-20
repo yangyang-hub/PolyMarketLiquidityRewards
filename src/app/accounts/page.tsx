@@ -407,8 +407,8 @@ export default function AccountsPage() {
       }
       modalRef.current?.close();
       await refreshConfigs();
-    } catch (e: any) {
-      setError(e.message || "操作失败");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "操作失败");
     } finally {
       setLoading(false);
     }
@@ -423,8 +423,8 @@ export default function AccountsPage() {
       deleteModalRef.current?.close();
       setDeleteTarget(null);
       await refreshConfigs();
-    } catch (e: any) {
-      setDeleteError(e.message || "删除失败");
+    } catch (e: unknown) {
+      setDeleteError(e instanceof Error ? e.message : "删除失败");
     } finally {
       setLoading(false);
     }

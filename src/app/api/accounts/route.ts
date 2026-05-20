@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { engineManager } from "@/lib/engine/manager";
 import { dbGetAllAccountMetas } from "@/lib/db/database";
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function GET() {
   const states = engineManager.getAccountStates();
   const configs = dbGetAllAccountMetas();
@@ -28,7 +32,7 @@ export async function POST(request: Request) {
     );
 
     return NextResponse.json({ ok: true });
-  } catch (e: any) {
-    return NextResponse.json({ error: e.message }, { status: 400 });
+  } catch (e: unknown) {
+    return NextResponse.json({ error: errorMessage(e) }, { status: 400 });
   }
 }

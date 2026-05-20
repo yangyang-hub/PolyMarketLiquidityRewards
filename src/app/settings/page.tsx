@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useAppStore } from "@/stores/appStore";
 import { useApi } from "@/hooks/useApi";
 import DepthSelector from "@/components/DepthSelector";
@@ -49,23 +49,22 @@ function NumberField({
 
 export default function SettingsPage() {
   const config = useAppStore((s) => s.config);
-  const { put } = useApi();
-  const [local, setLocal] = useState<StrategyConfig | null>(null);
-  const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    if (config && !local) {
-      setLocal({ ...config });
-    }
-  }, [config, local]);
-
-  if (!local) {
+  if (!config) {
     return (
-      <div className="flex items-center justify-center h-64">
+      <div className="flex h-64 items-center justify-center">
         <span className="loading loading-spinner loading-lg" />
       </div>
     );
   }
+
+  return <SettingsEditor config={config} />;
+}
+
+function SettingsEditor({ config }: { config: StrategyConfig }) {
+  const { put } = useApi();
+  const [local, setLocal] = useState<StrategyConfig>(() => ({ ...config }));
+  const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
     setSaving(true);
@@ -78,14 +77,14 @@ export default function SettingsPage() {
   };
 
   const handleReset = () => {
-    if (config) setLocal({ ...config });
+    setLocal({ ...config });
   };
 
   const updateField = <K extends keyof StrategyConfig>(key: K, value: StrategyConfig[K]) => {
-    setLocal((prev) => (prev ? { ...prev, [key]: value } : prev));
+    setLocal((prev) => ({ ...prev, [key]: value }));
   };
 
-  const hasChanges = config && JSON.stringify(local) !== JSON.stringify(config);
+  const hasChanges = JSON.stringify(local) !== JSON.stringify(config);
 
   return (
     <div className="min-h-full space-y-4 bg-[var(--terminal-bg)] p-4">
