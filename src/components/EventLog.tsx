@@ -2,51 +2,58 @@
 
 import type { OrderEvent } from "@/types";
 
+const typeColors: Record<string, string> = {
+  placed: "text-[var(--terminal-primary-text)]",
+  cancelled: "terminal-negative",
+  filled: "terminal-positive",
+  moved: "text-[var(--terminal-warning)]",
+};
+
+const typeLabels: Record<string, string> = {
+  placed: "信息",
+  cancelled: "警告",
+  filled: "成交",
+  moved: "移动",
+};
+
 export default function EventLog({ events }: { events: OrderEvent[] }) {
   if (events.length === 0) {
     return (
-      <div className="text-center text-sm opacity-60 py-4">
+      <div className="flex h-full items-center justify-center terminal-data terminal-muted">
         暂无事件
       </div>
     );
   }
 
-  const typeColors: Record<string, string> = {
-    placed: "text-info",
-    cancelled: "text-warning",
-    filled: "text-success",
-    moved: "text-accent",
-  };
-
-  const typeLabels: Record<string, string> = {
-    placed: "挂单",
-    cancelled: "撤单",
-    filled: "成交",
-    moved: "移动",
-  };
-
   return (
-    <div className="overflow-y-auto max-h-64 text-xs font-mono space-y-0.5">
-      {events.slice(0, 50).map((event, i) => (
+    <div className="terminal-data">
+      {events.slice(0, 80).map((event, i) => (
         <div
           key={`${event.orderId}-${event.timestamp}-${i}`}
-          className="flex gap-2 px-2 py-0.5 hover:bg-base-200"
+          className={`grid grid-cols-[116px_72px_92px_64px_82px_90px_minmax(0,1fr)] gap-2 border-b border-[var(--terminal-border)] px-3 py-1.5 hover:bg-[var(--terminal-panel-high)] ${
+            event.type === "cancelled" ? "bg-[rgba(255,82,94,0.12)]" : ""
+          }`}
         >
-          <span className="opacity-40 w-16 shrink-0">
-            {new Date(event.timestamp).toLocaleTimeString()}
+          <span className="terminal-muted">
+            {new Date(event.timestamp).toLocaleTimeString(undefined, {
+              hour12: false,
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+            })}
           </span>
-          <span className={`w-16 shrink-0 ${typeColors[event.type] || ""}`}>
-            {typeLabels[event.type] || event.type}
+          <span className={typeColors[event.type] || "terminal-muted"}>
+            {typeLabels[event.type] || event.type.toUpperCase()}
           </span>
-          <span className="opacity-60 w-16 shrink-0">{event.accountName}</span>
-          <span
-            className={event.side === "buy" ? "text-success" : "text-error"}
-          >
+          <span className="truncate terminal-muted">{event.accountName}</span>
+          <span className={event.side === "buy" ? "terminal-positive" : "terminal-negative"}>
             {event.side === "buy" ? "买入" : "卖出"}
           </span>
           <span>${event.price.toFixed(3)}</span>
-          <span>x{event.size.toFixed(2)}</span>
-          <span className="opacity-40 truncate">{event.marketSlug}</span>
+          <span>×{event.size.toFixed(2)}</span>
+          <span className="truncate terminal-muted">
+            {event.reason || `市场 ${event.tokenId.slice(0, 10)}`}
+          </span>
         </div>
       ))}
     </div>

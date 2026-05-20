@@ -18,6 +18,17 @@ export interface OrderBook {
 
 export interface StrategyConfig {
   cancelDepthLevel: number;
+  minBookNotionalUsd: number;
+  volumeDropWindowSec: number;
+  volumeDropPercent: number;
+  buyPressureWindowSec: number;
+  buyPressureUsd: number;
+  cancelFollowWindowSec: number;
+  cancelFollowDropPercent: number;
+  cancelFollowDepthLevels: number;
+  orderResetEnabled: boolean;
+  orderResetMinMinutes: number;
+  orderResetMaxMinutes: number;
 }
 
 // --- Discovered Market (auto-discovered from wallet orders) ---
@@ -34,7 +45,7 @@ export interface DiscoveredMarket {
 export interface AccountConfig {
   name: string;
   privateKey: string;
-  signatureType: number; // 0=EOA, 1=Proxy, 2=GnosisSafe
+  signatureType: number; // V2: 0=EOA, 1=Proxy, 2=GnosisSafe
   proxyWallet?: string;
 }
 
@@ -108,6 +119,7 @@ export interface OrderEvent {
   price: number;
   size: number;
   timestamp: number;
+  reason?: string;
 }
 
 // --- WebSocket Messages ---

@@ -5,7 +5,7 @@
 当前版本的核心能力是：
 
 - 管理多个 Polymarket 账户
-- 订阅并展示 CLOB 实时盘口
+- 订阅并展示 CLOB V2 实时盘口
 - 根据“买一 / 买二 / 买三...”档位自动撤单
 - 本地保存账户配置与撤单参数
 - 通过 WebSocket 向前端实时推送账户、盘口和事件状态
@@ -19,11 +19,14 @@
   - 支持 EOA / Proxy / Gnosis Safe 签名类型配置
   - 支持账户启停，重启后自动恢复已启用账户
 - 盘口监控
-  - 后端订阅 Polymarket CLOB WebSocket
+  - 后端订阅 Polymarket CLOB V2 WebSocket
   - 前端实时显示订单簿、账户状态和事件日志
   - 后端对新订阅 token 会等待首个快照，不会从空盘口拼增量
 - 自动撤单
   - 根据配置的撤单档位判断买单是否进入前 N 档
+  - 支持订单价格上方买盘金额不足时直接撤单
+  - 支持检测买盘前方量骤降、推断买入吃单、买盘撤量跟随
+  - 支持按随机时间窗口撤单并重新挂回队尾
   - 支持关闭自动撤单
   - 新订单有冷静期，避免刚发现就立刻撤掉
   - 真正撤单前会再用 CLOB REST 订单簿做一次确认，降低误撤单概率
@@ -37,12 +40,13 @@
 - 前端：Next.js 16 + React 19 + Zustand + DaisyUI
 - 后端：自定义 Node HTTP Server + Next.js App Router
 - 实时通道：
-  - 后端到 Polymarket：CLOB WebSocket
+  - 后端到 Polymarket：CLOB V2 WebSocket
   - 后端到浏览器：本项目自己的 `/ws`
 - 数据源：
-  - CLOB API / WebSocket：订单、订单簿、撤单、余额
+  - CLOB V2 API / WebSocket：订单、订单簿、撤单、余额
   - Gamma API：市场元数据，例如 `slug`、`question`、`condition_id`
 - 存储：`better-sqlite3`
+- 交易 SDK：`@polymarket/clob-client-v2`
 
 ## 目录结构
 
@@ -138,24 +142,41 @@ npm run start
 
 ## 撤单策略说明
 
-当前只有一个生效策略：`cancelDepthLevel`
+当前策略配置包括：
 
-- `0`：禁用自动撤单
-- `1`：当买单进入买一时撤单
-- `2`：当买单进入买二以内时撤单
-- `3`：当买单进入买三以内时撤单
-- 以此类推
+- `cancelDepthLevel`
+  - `0`：禁用档位撤单
+  - `1`：当买单进入买一时撤单
+  - `2`：当买单进入买二以内时撤单
+  - `3`：当买单进入买三以内时撤单
+  - 以此类推
+- `minBookNotionalUsd`
+  - 订单价格上方买盘金额低于该值时直接撤单
+  - `0` 表示禁用
+- `volumeDropPercent` / `volumeDropWindowSec`
+  - 在窗口期内，订单价格前方买盘金额骤降达到该比例时撤单
+  - 比例为 `0` 表示禁用
+- `buyPressureUsd` / `buyPressureWindowSec`
+  - 通过 ask 侧盘口减少推断连续买入吃单，窗口期内金额达到该值时撤单
+  - 金额为 `0` 表示禁用
+- `cancelFollowDropPercent` / `cancelFollowWindowSec` / `cancelFollowDepthLevels`
+  - 监测买盘前 N 档撤量比例，达到阈值时跟随撤单
+  - 比例为 `0` 表示禁用
+- `orderResetEnabled` / `orderResetMinMinutes` / `orderResetMaxMinutes`
+  - 启用后，订单在随机时间窗口到期时撤单并按原价格和剩余数量重新挂单
+  - 只有定时重置触发的撤单会重新挂单，其他风控撤单不会重挂
 
 注意：
 
 - 当前策略只监控**买单**
 - 判断基于订单价格在买盘中的档位，不是队列中的精确排队顺序
-- 新订单有冷静期，不会刚进入系统就立刻被撤
-- 撤单前会用 CLOB REST 再确认一次订单簿
+- 档位撤单有新订单冷静期；最低盘口量属于最高风控，会绕过冷静期
+- 档位撤单和最低盘口量撤单前会用 CLOB REST 再确认一次订单簿
+- 成交速度检测基于订单簿 ask 侧减少推断，不等同于逐笔成交明细
 
 ## 数据来源说明
 
-### 1. CLOB API / WebSocket
+### 1. CLOB V2 API / WebSocket
 
 用于：
 

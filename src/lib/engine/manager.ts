@@ -274,11 +274,11 @@ class EngineManager {
     signatureType: number,
     proxyWallet?: string,
   ): Promise<void> {
-    if (!name.trim()) throw new Error("Account name is required");
+    if (!name.trim()) throw new Error("账户名称不能为空");
     if (!ACCOUNT_NAME_RE.test(name.trim())) {
-      throw new Error("Account name must be alphanumeric/underscore/dash, 1-64 chars");
+      throw new Error("账户名称仅支持字母、数字、下划线和连字符，长度 1-64 位");
     }
-    if (this.engines.has(name)) throw new Error(`Account "${name}" already exists`);
+    if (this.engines.has(name)) throw new Error(`账户已存在：${name}`);
 
     // Validate private key
     const wallet = new ethers.Wallet(privateKey);
@@ -320,12 +320,12 @@ class EngineManager {
     proxyWallet?: string,
   ): Promise<void> {
     const engine = this.engines.get(name);
-    if (!engine) throw new Error(`Account "${name}" not found`);
+    if (!engine) throw new Error(`未找到账户：${name}`);
 
     dbUpdateAccount(name, privateKey, signatureType, proxyWallet);
 
     const newConfig = dbGetAccountConfig(name);
-    if (!newConfig) throw new Error(`Account "${name}" not found in DB after update`);
+    if (!newConfig) throw new Error(`账户更新后无法从数据库读取：${name}`);
 
     if (engine.isRunning()) {
       await engine.stop();
@@ -345,7 +345,7 @@ class EngineManager {
 
   async removeAccount(name: string): Promise<void> {
     const engine = this.engines.get(name);
-    if (!engine) throw new Error(`Account "${name}" not found`);
+    if (!engine) throw new Error(`未找到账户：${name}`);
 
     dbDeleteAccount(name);
 

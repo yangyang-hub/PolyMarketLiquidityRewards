@@ -6,7 +6,11 @@ import type { AccountMeta } from "../types";
 import { encryptPrivateKey, decryptPrivateKey } from "./crypto";
 import { defaultConfig } from "../config";
 
-const DB_PATH = path.join(process.cwd(), "data", "app.db");
+function getDataDir(): string {
+  return process.env.APP_DATA_DIR || path.join(process.cwd(), "data");
+}
+
+const DB_PATH = path.join(getDataDir(), "app.db");
 
 const g = globalThis as typeof globalThis & { __appDb?: Database.Database };
 
@@ -87,7 +91,7 @@ export function dbUpdateAccount(
     ).run(signatureType, proxyWallet ?? null, name);
   }
   if (result.changes === 0) {
-    throw new Error(`Account "${name}" not found in database`);
+    throw new Error(`数据库中未找到账户：${name}`);
   }
 }
 
@@ -157,7 +161,15 @@ export function dbLoadStrategyConfig(): StrategyConfig {
   for (const key of Object.keys(cfg) as (keyof StrategyConfig)[]) {
     const raw = map.get(key);
     if (raw == null) continue;
-    (cfg as any)[key] = Number(raw);
+    const fallback = cfg[key];
+    if (typeof fallback === "boolean") {
+      (cfg as any)[key] = raw === "true" || raw === "1";
+    } else {
+      const n = Number(raw);
+      if (Number.isFinite(n)) {
+        (cfg as any)[key] = n;
+      }
+    }
   }
   return cfg;
 }

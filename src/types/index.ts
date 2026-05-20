@@ -46,6 +46,17 @@ export interface OrderBookDto {
 
 export interface StrategyConfig {
   cancelDepthLevel: number;
+  minBookNotionalUsd: number;
+  volumeDropWindowSec: number;
+  volumeDropPercent: number;
+  buyPressureWindowSec: number;
+  buyPressureUsd: number;
+  cancelFollowWindowSec: number;
+  cancelFollowDropPercent: number;
+  cancelFollowDepthLevels: number;
+  orderResetEnabled: boolean;
+  orderResetMinMinutes: number;
+  orderResetMaxMinutes: number;
 }
 
 export interface MarketToken {
@@ -73,6 +84,7 @@ export interface OrderEvent {
   price: number;
   size: number;
   timestamp: number;
+  reason?: string;
 }
 
 export type WsMessage =

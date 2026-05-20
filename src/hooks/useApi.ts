@@ -3,7 +3,7 @@
 import { useCallback } from "react";
 
 async function extractError(method: string, path: string, res: Response): Promise<Error> {
-  let msg = `${method} ${path}: ${res.status}`;
+  let msg = `请求失败：状态码 ${res.status}`;
   try {
     const body = await res.json();
     if (body.error) msg = body.error;

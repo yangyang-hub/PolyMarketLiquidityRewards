@@ -58,7 +58,7 @@ export async function fetchMarketByConditionId(conditionId: string): Promise<Mar
   const host = getGammaHost();
   const url = `${host}/markets?condition_id=${conditionId}`;
   const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`Gamma API error: ${resp.status}`);
+  if (!resp.ok) throw new Error(`市场信息接口异常：${resp.status}`);
   const data: GammaMarketResp[] = await resp.json();
   if (data.length === 0) return null;
   return mapToMarketInfo(data[0]);
@@ -68,7 +68,7 @@ export async function fetchMarketBySlug(slug: string): Promise<MarketInfo | null
   const host = getGammaHost();
   const url = `${host}/markets?slug=${slug}`;
   const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`Gamma API error: ${resp.status}`);
+  if (!resp.ok) throw new Error(`市场信息接口异常：${resp.status}`);
   const data: GammaMarketResp[] = await resp.json();
   if (data.length === 0) return null;
   return mapToMarketInfo(data[0]);

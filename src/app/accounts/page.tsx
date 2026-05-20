@@ -24,15 +24,15 @@ const emptyForm: AccountForm = {
 };
 
 const SIG_TYPE_LABELS: Record<number, string> = {
-  0: "EOA",
-  1: "Proxy",
-  2: "GnosisSafe",
+  0: "外部账户",
+  1: "代理钱包",
+  2: "多签钱包",
 };
 
 const SIG_TYPE_DESCRIPTIONS: Record<number, string> = {
   0: "直接用私钥签名",
   1: "通过代理合约签名",
-  2: "Gnosis Safe 多签",
+  2: "多签钱包授权",
 };
 
 const NAME_RE = /^[a-zA-Z0-9_\-]{1,64}$/;
@@ -43,6 +43,13 @@ interface FieldErrors {
   name?: string;
   privateKey?: string;
   proxyWallet?: string;
+}
+
+function formatDisplayError(message: string): string {
+  if (/[\u4e00-\u9fff]/.test(message)) return message;
+  if (/key|signature|wallet/i.test(message)) return "密钥、签名或钱包配置异常";
+  if (/network|fetch|connection|timeout/i.test(message)) return "网络连接异常，请稍后重试";
+  return "运行异常，请查看后台日志";
 }
 
 function validateForm(
@@ -184,7 +191,7 @@ const AccountCardItem = memo(function AccountCardItem({
                 </span>
                 {cfg && (
                   <span className="badge badge-ghost badge-xs">
-                    {SIG_TYPE_LABELS[cfg.signatureType] ?? `sig:${cfg.signatureType}`}
+                    {SIG_TYPE_LABELS[cfg.signatureType] ?? `签名:${cfg.signatureType}`}
                   </span>
                 )}
               </div>
@@ -269,7 +276,7 @@ const AccountCardItem = memo(function AccountCardItem({
         {account?.error && (
           <div className="px-4 pt-2">
             <div className="text-xs text-error bg-error/10 rounded-lg px-3 py-2">
-              {account.error}
+              {formatDisplayError(account.error)}
             </div>
           </div>
         )}
@@ -464,16 +471,16 @@ export default function AccountsPage() {
   const showNeedsProxy = form.signatureType === 1 || form.signatureType === 2;
 
   return (
-    <div className="space-y-6">
+    <div className="min-h-full space-y-4 bg-[var(--terminal-bg)] p-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold">账户管理</h2>
-          <p className="text-sm opacity-50 mt-1">
+          <h2 className="text-[22px] font-semibold">账户管理</h2>
+          <p className="terminal-data terminal-muted mt-1">
             管理做市账户的私钥、签名类型与代理钱包配置
           </p>
         </div>
-        <button className="btn btn-primary btn-sm gap-1" onClick={openAddModal}>
+        <button className="terminal-action primary" onClick={openAddModal}>
           <IconPlus className="h-3.5 w-3.5" />
           添加账户
         </button>
@@ -488,7 +495,7 @@ export default function AccountsPage() {
             </div>
             <h3 className="font-semibold text-lg">暂无账户</h3>
             <p className="text-sm opacity-50 max-w-xs mt-1">
-              添加账户以开始监控挂单。私钥使用 AES-256-GCM 加密存储在本地数据库中。
+              添加账户以开始监控挂单。私钥会以本地强加密方式存储在数据库中。
             </p>
             <button
               className="btn btn-primary btn-sm gap-1 mt-4"
@@ -548,7 +555,7 @@ export default function AccountsPage() {
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
               </svg>
-              {error}
+              {formatDisplayError(error)}
             </div>
           )}
 
@@ -578,7 +585,7 @@ export default function AccountsPage() {
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   onBlur={() => markTouched("name")}
-                  placeholder="例如 main, bot-1"
+                  placeholder="仅支持拼音、数字、下划线、连字符"
                   autoFocus
                   autoComplete="off"
                 />
@@ -650,7 +657,7 @@ export default function AccountsPage() {
                 <label className="label pt-1 pb-0">
                   <span className="label-text-alt opacity-40 flex items-center gap-1">
                     <IconShield className="h-3 w-3" />
-                    {editingName ? "留空则保留原密钥" : "AES-256-GCM 加密存储"}
+                    {editingName ? "留空则保留原密钥" : "本地强加密存储"}
                   </span>
                 </label>
               )}
@@ -725,7 +732,7 @@ export default function AccountsPage() {
                 ) : (
                   <label className="label pt-1 pb-0">
                     <span className="label-text-alt opacity-40">
-                      Polymarket 代理钱包的以太坊地址
+                      预测市场代理钱包的以太坊地址
                     </span>
                   </label>
                 )}
@@ -787,7 +794,7 @@ export default function AccountsPage() {
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
               </svg>
-              {deleteError}
+              {formatDisplayError(deleteError)}
             </div>
           )}
           <div className="modal-action">
@@ -811,7 +818,7 @@ export default function AccountsPage() {
           </div>
         </div>
         <form method="dialog" className="modal-backdrop">
-          <button>close</button>
+          <button>关闭</button>
         </form>
       </dialog>
     </div>

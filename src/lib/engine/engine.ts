@@ -7,11 +7,45 @@ import type {
   OrderBook,
 } from "../types";
 import { ClobExecutor } from "../clob/executor";
-import { shouldCancelDepthOrder } from "../strategy/depth-strategy";
+import {
+  askReductionNotional,
+  protectedBidNotional,
+  shouldCancelDepthOrder,
+  shouldCancelMinBookNotional,
+  topBidNotional,
+} from "../strategy/depth-strategy";
 import { store } from "../store/memory-store";
+
+interface BookHistorySample {
+  timestamp: number;
+  book: OrderBook;
+}
+
+interface NotionalSample {
+  timestamp: number;
+  notional: Decimal;
+}
+
+interface CancelTrigger {
+  code:
+    | "min_book_notional"
+    | "depth_position"
+    | "front_volume_drop"
+    | "buy_pressure"
+    | "cancel_follow";
+  label: string;
+  bypassCooldown?: boolean;
+  requiresRestConfirmation?: boolean;
+}
+
+interface ResetOrderResult {
+  didReset: boolean;
+  replacement?: ActiveOrder;
+}
 
 export class AccountEngine {
   private static NEW_ORDER_COOLDOWN_MS = 15_000;
+  private static HISTORY_RETENTION_MS = 125_000;
   private account: AccountConfig;
   private executor: ClobExecutor;
   private running = false;
@@ -19,6 +53,10 @@ export class AccountEngine {
   private ticking = false;
   private cancellingTokens: Set<string> = new Set(); // per-token guard
   private realtimeCancelledIds: Set<string> = new Set(); // orders cancelled by realtimeCheck during tick
+  private latestBooks: Map<string, OrderBook> = new Map();
+  private bookHistory: Map<string, BookHistorySample[]> = new Map();
+  private buyPressureHistory: Map<string, NotionalSample[]> = new Map();
+  private resetDueAtByOrderId: Map<string, number> = new Map();
   private onEvent: (event: OrderEvent) => void;
   private onStateChange: (name: string, state: AccountState) => void;
   private onTokensDiscovered: (accountName: string, tokenIds: Set<string>) => Promise<void>;
@@ -111,6 +149,10 @@ export class AccountEngine {
    */
   onBookUpdate(tokenId: string): void {
     if (!this.running) return;
+    const book = store.orderbooks.get(tokenId);
+    if (book) {
+      this.recordBookUpdate(tokenId, book);
+    }
     this.realtimeCancelCheck(tokenId);
   }
 
@@ -131,9 +173,6 @@ export class AccountEngine {
     if (this.cancellingTokens.has(tokenId)) return;
     this.cancellingTokens.add(tokenId);
     try {
-      const cancelDepthLevel = store.config.cancelDepthLevel;
-      if (cancelDepthLevel === 0) return;
-
       const book = store.orderbooks.get(tokenId);
       if (!book) return;
 
@@ -144,34 +183,27 @@ export class AccountEngine {
       if (ordersForToken.length === 0) return;
 
       for (const order of ordersForToken) {
-        if (!this.isOrderEligibleForCancel(order)) continue;
         const orderPrice = new Decimal(order.priceStr);
         const isBuy = order.side === "buy";
+        const trigger = this.getRiskCancelTrigger(book, orderPrice, isBuy);
+        if (!trigger) continue;
 
-        if (shouldCancelDepthOrder(book, orderPrice, isBuy, cancelDepthLevel)) {
-          const confirmed = await this.confirmCancelWithRestBook(tokenId, orderPrice, isBuy);
-          if (!confirmed) continue;
-          const slug = order.marketSlug || this.findSlugForToken(tokenId);
-          console.log(`[Engine:${this.account.name}] Cancelling ${order.orderId} (realtime depth trigger, token=${tokenId.slice(0, 12)}...)`);
-          const cancelled = await this.executor.cancelOrder(order.orderId);
-          if (cancelled) {
-            this.realtimeCancelledIds.add(order.orderId);
-            this.emitEvent("cancelled", {
-              id: order.orderId,
-              asset_id: order.tokenId,
-              side: order.side === "buy" ? "BUY" : "SELL",
-              price: order.priceStr,
-              original_size: String(order.size),
-            }, slug);
+        if (!trigger.bypassCooldown && !this.isOrderEligibleForCancel(order)) continue;
 
-            // Remove from cached orders immediately
-            const current = store.accounts.get(this.account.name);
-            if (current) {
-              store.updateAccount(this.account.name, {
-                activeOrders: current.activeOrders.filter((o) => o.orderId !== order.orderId),
-              });
-              this.broadcastState();
-            }
+        const confirmed = await this.confirmRiskCancelWithRestBook(tokenId, orderPrice, isBuy, trigger);
+        if (!confirmed) continue;
+
+        const cancelled = await this.cancelActiveOrder(order, trigger, "realtime");
+        if (cancelled) {
+          this.realtimeCancelledIds.add(order.orderId);
+
+          // Remove from cached orders immediately
+          const current = store.accounts.get(this.account.name);
+          if (current) {
+            store.updateAccount(this.account.name, {
+              activeOrders: current.activeOrders.filter((o) => o.orderId !== order.orderId),
+            });
+            this.broadcastState();
           }
         }
       }
@@ -187,7 +219,7 @@ export class AccountEngine {
    * Called periodically (every 15s) and on initial discovery.
    */
   private async tick(): Promise<void> {
-    const cancelDepthLevel = store.config.cancelDepthLevel;
+    const config = store.config;
     this.realtimeCancelledIds.clear();
     const prev = store.accounts.get(this.account.name);
     const previousOrderMap = new Map((prev?.activeOrders || []).map((o) => [o.orderId, o]));
@@ -197,7 +229,10 @@ export class AccountEngine {
     const trackedOrders: ActiveOrder[] = [];
     const activeTokenIds = new Set<string>();
 
-    console.log(`[Engine:${this.account.name}] Tick: ${openOrders.length} open orders, cancelDepth=${cancelDepthLevel}`);
+    console.log(
+      `[Engine:${this.account.name}] Tick: ${openOrders.length} open orders, ` +
+      `cancelDepth=${config.cancelDepthLevel}, minBook=$${config.minBookNotionalUsd}`,
+    );
 
     // Check scoring status
     const allOrderIds = openOrders.map((o) => o.id);
@@ -205,7 +240,7 @@ export class AccountEngine {
       ? await this.executor.areOrdersScoring(allOrderIds)
       : {};
 
-    // 2. Process each order: check cancel condition
+    // 2. Process each order: check risk rules first, then optional reset.
     for (const order of openOrders) {
       const tokenId = order.asset_id;
       activeTokenIds.add(tokenId);
@@ -213,45 +248,48 @@ export class AccountEngine {
       const book = store.orderbooks.get(tokenId);
       const orderPrice = new Decimal(order.price);
       const isBuy = order.side?.toUpperCase() === "BUY";
-
       const slug = this.findSlugForToken(tokenId);
+      const activeOrder = this.withPreservedTimestamp(
+        this.toActiveOrder(order, slug, scoringMap),
+        previousOrderMap,
+      );
 
-      if (book && cancelDepthLevel > 0) {
-        const shouldCancel = shouldCancelDepthOrder(book, orderPrice, isBuy, cancelDepthLevel);
+      if (book && !this.latestBooks.has(tokenId)) {
+        this.recordBookUpdate(tokenId, book);
+      }
 
-        if (shouldCancel) {
-          const activeOrder = this.withPreservedTimestamp(
-            this.toActiveOrder(order, slug, scoringMap),
-            previousOrderMap,
-          );
-          if (!this.isOrderEligibleForCancel(activeOrder)) {
+      if (book) {
+        const trigger = this.getRiskCancelTrigger(book, orderPrice, isBuy);
+        if (trigger) {
+          if (!trigger.bypassCooldown && !this.isOrderEligibleForCancel(activeOrder)) {
             trackedOrders.push(activeOrder);
-          } else {
-            const confirmed = await this.confirmCancelWithRestBook(tokenId, orderPrice, isBuy);
-            if (confirmed) {
-              console.log(`[Engine:${this.account.name}] Cancelling ${order.id} (tick depth trigger, token=${tokenId.slice(0, 12)}...)`);
-              const cancelled = await this.executor.cancelOrder(order.id);
-              if (cancelled) {
-                this.emitEvent("cancelled", order, slug);
-              } else {
-                trackedOrders.push(activeOrder);
-              }
-            } else {
+            continue;
+          }
+
+          const confirmed = await this.confirmRiskCancelWithRestBook(tokenId, orderPrice, isBuy, trigger);
+          if (confirmed) {
+            const cancelled = await this.cancelRawOrder(order, activeOrder, trigger, "tick");
+            if (!cancelled) {
               trackedOrders.push(activeOrder);
             }
+            continue;
           }
-        } else {
-          trackedOrders.push(this.withPreservedTimestamp(
-            this.toActiveOrder(order, slug, scoringMap),
-            previousOrderMap,
-          ));
+
+          trackedOrders.push(activeOrder);
+          continue;
         }
-      } else {
-        trackedOrders.push(this.withPreservedTimestamp(
-          this.toActiveOrder(order, slug, scoringMap),
-          previousOrderMap,
-        ));
       }
+
+      const resetResult = await this.tryResetOrder(order, activeOrder, slug);
+      if (resetResult.didReset) {
+        if (resetResult.replacement) {
+          trackedOrders.push(resetResult.replacement);
+          activeTokenIds.add(resetResult.replacement.tokenId);
+        }
+        continue;
+      }
+
+      trackedOrders.push(activeOrder);
     }
 
     // 3. Update account state BEFORE notifying manager,
@@ -267,6 +305,7 @@ export class AccountEngine {
       const existing = previousOrderMap.get(order.orderId);
       return existing ? { ...order, timestamp: existing.timestamp } : order;
     });
+    this.cleanupOrderRuntimeState(mergedOrders);
     const balanceChanged = prev?.balance !== freshBalance;
     const ordersChanged = !this.sameActiveOrders(prev?.activeOrders || [], mergedOrders);
     const marketsChanged = prev?.marketsCount !== activeTokenIds.size;
@@ -325,7 +364,7 @@ export class AccountEngine {
       side: order.side?.toUpperCase() === "BUY" ? "buy" : "sell",
       price: parseFloat(order.price),
       priceStr: order.price,
-      size: parseFloat(order.original_size),
+      size: parseFloat(order.original_size || order.size || "0"),
       status: "open",
       scoring: scoringMap[order.id] === true,
       timestamp: Date.now(),
@@ -367,11 +406,168 @@ export class AccountEngine {
     return true;
   }
 
-  private async confirmCancelWithRestBook(
+  private recordBookUpdate(tokenId: string, book: OrderBook): void {
+    const now = Date.now();
+    const previous = this.latestBooks.get(tokenId);
+
+    if (previous) {
+      const buyPressure = askReductionNotional(previous, book);
+      if (buyPressure.greaterThan(0)) {
+        const pressureSamples = this.buyPressureHistory.get(tokenId) || [];
+        pressureSamples.push({ timestamp: now, notional: buyPressure });
+        this.buyPressureHistory.set(
+          tokenId,
+          pressureSamples.filter((sample) => now - sample.timestamp <= AccountEngine.HISTORY_RETENTION_MS),
+        );
+      }
+    }
+
+    this.latestBooks.set(tokenId, book);
+
+    const samples = this.bookHistory.get(tokenId) || [];
+    samples.push({ timestamp: now, book });
+    this.bookHistory.set(
+      tokenId,
+      samples.filter((sample) => now - sample.timestamp <= AccountEngine.HISTORY_RETENTION_MS),
+    );
+  }
+
+  private getRiskCancelTrigger(
+    book: OrderBook,
+    orderPrice: Decimal,
+    isBuy: boolean,
+  ): CancelTrigger | null {
+    if (!isBuy) return null;
+
+    const config = store.config;
+
+    if (shouldCancelMinBookNotional(book, orderPrice, isBuy, config.minBookNotionalUsd)) {
+      return {
+        code: "min_book_notional",
+        label: `盘口前方金额低于 $${config.minBookNotionalUsd}`,
+        bypassCooldown: true,
+        requiresRestConfirmation: true,
+      };
+    }
+
+    if (shouldCancelDepthOrder(book, orderPrice, isBuy, config.cancelDepthLevel)) {
+      return {
+        code: "depth_position",
+        label: `买单进入前 ${config.cancelDepthLevel} 档`,
+        requiresRestConfirmation: true,
+      };
+    }
+
+    if (config.volumeDropPercent > 0) {
+      const drop = this.getProtectedBidDropPercent(book, orderPrice, config.volumeDropWindowSec);
+      if (drop && drop.greaterThanOrEqualTo(config.volumeDropPercent)) {
+        return {
+          code: "front_volume_drop",
+          label: `${config.volumeDropWindowSec}s 前方买盘骤降 ${drop.toDecimalPlaces(1)}%`,
+        };
+      }
+    }
+
+    if (config.buyPressureUsd > 0) {
+      const buyPressure = this.sumBuyPressure(book.tokenId, config.buyPressureWindowSec);
+      if (buyPressure.greaterThanOrEqualTo(config.buyPressureUsd)) {
+        return {
+          code: "buy_pressure",
+          label: `${config.buyPressureWindowSec}s 推断买入吃单 $${buyPressure.toDecimalPlaces(2)}`,
+        };
+      }
+    }
+
+    if (config.cancelFollowDropPercent > 0) {
+      const drop = this.getTopBidDropPercent(
+        book,
+        config.cancelFollowDepthLevels,
+        config.cancelFollowWindowSec,
+      );
+      if (drop && drop.greaterThanOrEqualTo(config.cancelFollowDropPercent)) {
+        return {
+          code: "cancel_follow",
+          label: `${config.cancelFollowWindowSec}s 买盘撤量跟随 ${drop.toDecimalPlaces(1)}%`,
+        };
+      }
+    }
+
+    return null;
+  }
+
+  private getProtectedBidDropPercent(
+    currentBook: OrderBook,
+    orderPrice: Decimal,
+    windowSec: number,
+  ): Decimal | null {
+    const peak = this.getPeakBookNotional(currentBook.tokenId, windowSec, (book) =>
+      protectedBidNotional(book, orderPrice),
+    );
+    const current = protectedBidNotional(currentBook, orderPrice);
+    return this.dropPercent(peak, current);
+  }
+
+  private getTopBidDropPercent(
+    currentBook: OrderBook,
+    levels: number,
+    windowSec: number,
+  ): Decimal | null {
+    const peak = this.getPeakBookNotional(currentBook.tokenId, windowSec, (book) =>
+      topBidNotional(book, levels),
+    );
+    const current = topBidNotional(currentBook, levels);
+    return this.dropPercent(peak, current);
+  }
+
+  private getPeakBookNotional(
+    tokenId: string,
+    windowSec: number,
+    selector: (book: OrderBook) => Decimal,
+  ): Decimal {
+    const cutoff = Date.now() - windowSec * 1000;
+    const samples = this.bookHistory.get(tokenId) || [];
+    let peak = new Decimal(0);
+
+    for (const sample of samples) {
+      if (sample.timestamp < cutoff) continue;
+      const value = selector(sample.book);
+      if (value.greaterThan(peak)) {
+        peak = value;
+      }
+    }
+
+    return peak;
+  }
+
+  private dropPercent(peak: Decimal, current: Decimal): Decimal | null {
+    if (peak.lessThanOrEqualTo(0) || current.greaterThanOrEqualTo(peak)) {
+      return null;
+    }
+    return peak.minus(current).dividedBy(peak).times(100);
+  }
+
+  private sumBuyPressure(tokenId: string, windowSec: number): Decimal {
+    const cutoff = Date.now() - windowSec * 1000;
+    const samples = this.buyPressureHistory.get(tokenId) || [];
+    let total = new Decimal(0);
+
+    for (const sample of samples) {
+      if (sample.timestamp >= cutoff) {
+        total = total.plus(sample.notional);
+      }
+    }
+
+    return total;
+  }
+
+  private async confirmRiskCancelWithRestBook(
     tokenId: string,
     orderPrice: Decimal,
     isBuy: boolean,
+    trigger: CancelTrigger,
   ): Promise<boolean> {
+    if (!trigger.requiresRestConfirmation) return true;
+
     const rawBook = await this.executor.getOrderBook(tokenId);
     const restBook = this.normalizeRestBook(tokenId, rawBook);
     if (!restBook) {
@@ -381,12 +577,172 @@ export class AccountEngine {
       return false;
     }
 
-    return shouldCancelDepthOrder(
-      restBook,
-      orderPrice,
-      isBuy,
-      store.config.cancelDepthLevel,
+    if (trigger.code === "min_book_notional") {
+      return shouldCancelMinBookNotional(
+        restBook,
+        orderPrice,
+        isBuy,
+        store.config.minBookNotionalUsd,
+      );
+    }
+
+    if (trigger.code === "depth_position") {
+      return shouldCancelDepthOrder(
+        restBook,
+        orderPrice,
+        isBuy,
+        store.config.cancelDepthLevel,
+      );
+    }
+
+    return true;
+  }
+
+  private async cancelActiveOrder(
+    order: ActiveOrder,
+    trigger: CancelTrigger,
+    source: "realtime" | "tick",
+  ): Promise<boolean> {
+    return this.cancelRawOrder(
+      {
+        id: order.orderId,
+        asset_id: order.tokenId,
+        side: order.side === "buy" ? "BUY" : "SELL",
+        price: order.priceStr,
+        original_size: String(order.size),
+      },
+      order,
+      trigger,
+      source,
     );
+  }
+
+  private async cancelRawOrder(
+    rawOrder: any,
+    activeOrder: ActiveOrder,
+    trigger: CancelTrigger,
+    source: "realtime" | "tick",
+  ): Promise<boolean> {
+    const slug = activeOrder.marketSlug || this.findSlugForToken(activeOrder.tokenId);
+    console.log(
+      `[Engine:${this.account.name}] Cancelling ${activeOrder.orderId} ` +
+      `(${source} ${trigger.code}: ${trigger.label}, token=${activeOrder.tokenId.slice(0, 12)}...)`,
+    );
+
+    const cancelled = await this.executor.cancelOrder(activeOrder.orderId);
+    if (cancelled) {
+      this.resetDueAtByOrderId.delete(activeOrder.orderId);
+      this.emitEvent("cancelled", rawOrder, slug, trigger.label);
+    }
+    return cancelled;
+  }
+
+  private async tryResetOrder(
+    rawOrder: any,
+    activeOrder: ActiveOrder,
+    slug: string,
+  ): Promise<ResetOrderResult> {
+    const dueAt = this.getResetDueAt(activeOrder);
+    if (dueAt == null || Date.now() < dueAt) {
+      return { didReset: false };
+    }
+
+    const remainingSize = this.getRemainingOrderSize(rawOrder, activeOrder);
+    if (remainingSize.lessThanOrEqualTo(0)) {
+      this.resetDueAtByOrderId.delete(activeOrder.orderId);
+      return { didReset: false };
+    }
+
+    console.log(
+      `[Engine:${this.account.name}] Resetting ${activeOrder.orderId} ` +
+      `(timer, token=${activeOrder.tokenId.slice(0, 12)}...)`,
+    );
+
+    const cancelled = await this.executor.cancelOrder(activeOrder.orderId);
+    if (!cancelled) {
+      this.resetDueAtByOrderId.set(activeOrder.orderId, Date.now() + 60_000);
+      return { didReset: false };
+    }
+
+    this.resetDueAtByOrderId.delete(activeOrder.orderId);
+    this.emitEvent("cancelled", rawOrder, slug, "定时重置");
+
+    const price = new Decimal(activeOrder.priceStr);
+    const newOrderId = activeOrder.side === "buy"
+      ? await this.executor.buyLimitPostOnly(activeOrder.tokenId, price, remainingSize)
+      : await this.executor.sellLimitPostOnly(activeOrder.tokenId, price, remainingSize);
+
+    if (!newOrderId) {
+      return { didReset: true };
+    }
+
+    const replacement: ActiveOrder = {
+      ...activeOrder,
+      orderId: newOrderId,
+      size: remainingSize.toNumber(),
+      scoring: false,
+      timestamp: Date.now(),
+    };
+    this.getResetDueAt(replacement);
+
+    this.emitEvent("placed", {
+      id: newOrderId,
+      asset_id: activeOrder.tokenId,
+      side: activeOrder.side === "buy" ? "BUY" : "SELL",
+      price: activeOrder.priceStr,
+      original_size: remainingSize.toString(),
+    }, slug, "定时重置重挂");
+
+    return { didReset: true, replacement };
+  }
+
+  private getResetDueAt(order: ActiveOrder): number | null {
+    const config = store.config;
+    if (!config.orderResetEnabled) {
+      this.resetDueAtByOrderId.delete(order.orderId);
+      return null;
+    }
+
+    const minMinutes = Math.max(1, config.orderResetMinMinutes);
+    const maxMinutes = Math.max(minMinutes, config.orderResetMaxMinutes);
+    const existing = this.resetDueAtByOrderId.get(order.orderId);
+    if (existing) return existing;
+
+    const minMs = minMinutes * 60_000;
+    const maxMs = maxMinutes * 60_000;
+    const dueAt = Date.now() + this.randomBetween(minMs, maxMs);
+    this.resetDueAtByOrderId.set(order.orderId, dueAt);
+    return dueAt;
+  }
+
+  private randomBetween(min: number, max: number): number {
+    if (max <= min) return min;
+    return min + Math.floor(Math.random() * (max - min + 1));
+  }
+
+  private getRemainingOrderSize(rawOrder: any, activeOrder: ActiveOrder): Decimal {
+    const original = this.safeDecimal(rawOrder.original_size ?? rawOrder.size, activeOrder.size);
+    const matched = this.safeDecimal(rawOrder.size_matched ?? rawOrder.matched_size, 0);
+    const remaining = original.minus(matched);
+    return remaining.greaterThan(0) ? remaining : new Decimal(0);
+  }
+
+  private safeDecimal(value: unknown, fallback: number): Decimal {
+    try {
+      if (value == null || value === "") return new Decimal(fallback);
+      return new Decimal(value as any);
+    } catch {
+      return new Decimal(fallback);
+    }
+  }
+
+  private cleanupOrderRuntimeState(activeOrders: ActiveOrder[]): void {
+    const activeIds = new Set(activeOrders.map((order) => order.orderId));
+    for (const orderId of this.resetDueAtByOrderId.keys()) {
+      if (!activeIds.has(orderId)) {
+        this.resetDueAtByOrderId.delete(orderId);
+      }
+    }
   }
 
   private normalizeRestBook(tokenId: string, rawBook: any): OrderBook | null {
@@ -418,7 +774,7 @@ export class AccountEngine {
     };
   }
 
-  private emitEvent(type: OrderEvent["type"], order: any, slug: string): void {
+  private emitEvent(type: OrderEvent["type"], order: any, slug: string, reason?: string): void {
     const event: OrderEvent = {
       type,
       accountName: this.account.name,
@@ -429,6 +785,7 @@ export class AccountEngine {
       price: parseFloat(order.price),
       size: parseFloat(order.original_size || order.size || "0"),
       timestamp: Date.now(),
+      reason,
     };
     store.addEvent(event);
     this.onEvent(event);

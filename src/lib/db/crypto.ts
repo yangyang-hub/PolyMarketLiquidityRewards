@@ -2,7 +2,11 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 
-const KEY_FILE = path.join(process.cwd(), "data", ".encryption-key");
+function getDataDir(): string {
+  return process.env.APP_DATA_DIR || path.join(process.cwd(), "data");
+}
+
+const KEY_FILE = path.join(getDataDir(), ".encryption-key");
 const ALGORITHM = "aes-256-gcm";
 
 let cachedKey: Buffer | null = null;
@@ -19,8 +23,8 @@ export function getEncryptionKey(): Buffer {
     cachedKey = Buffer.from(fs.readFileSync(KEY_FILE, "utf-8").trim(), "hex");
     if (cachedKey.length !== 32) {
       throw new Error(
-        `Encryption key file is corrupted (expected 32 bytes, got ${cachedKey.length}). ` +
-        `Delete ${KEY_FILE} to regenerate (will invalidate existing encrypted data).`,
+        `加密密钥文件已损坏（需要 32 字节，实际 ${cachedKey.length} 字节）。` +
+        `删除 ${KEY_FILE} 后可重新生成，但会导致现有加密数据失效。`,
       );
     }
   } else {

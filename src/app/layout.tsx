@@ -3,8 +3,8 @@ import "./globals.css";
 import ClientLayout from "./client-layout";
 
 export const metadata: Metadata = {
-  title: "PolyMarket LR",
-  description: "Polymarket 流动性挖矿做市机器人",
+  title: "流动性风控终端",
+  description: "预测市场流动性挖矿做市机器人",
 };
 
 export default function RootLayout({

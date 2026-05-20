@@ -2,72 +2,79 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useAppStore } from "@/stores/appStore";
 
 const navItems = [
-  { href: "/", label: "仪表盘", icon: "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" },
-  { href: "/accounts", label: "账户管理", icon: "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" },
-  { href: "/settings", label: "撤单设置", icon: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z" },
+  {
+    href: "/",
+    label: "仪表盘",
+    icon: (
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 0h6v6h-6v-6z" />
+    ),
+  },
+  {
+    href: "/accounts",
+    label: "账户",
+    icon: (
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 21v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2m14-10a4 4 0 10-8 0 4 4 0 008 0zm4 10v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />
+    ),
+  },
+  {
+    href: "/settings",
+    label: "设置",
+    icon: (
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15.5A3.5 3.5 0 1112 8a3.5 3.5 0 010 7.5zm7.4-2.1a1.8 1.8 0 000-2.8l-1.3-1a7.5 7.5 0 00-.7-1.7l.2-1.6a1.8 1.8 0 00-2-2l-1.6.2a7.5 7.5 0 00-1.7-.7l-1-1.3a1.8 1.8 0 00-2.8 0l-1 1.3a7.5 7.5 0 00-1.7.7l-1.6-.2a1.8 1.8 0 00-2 2l.2 1.6a7.5 7.5 0 00-.7 1.7l-1.3 1a1.8 1.8 0 000 2.8l1.3 1a7.5 7.5 0 00.7 1.7l-.2 1.6a1.8 1.8 0 002 2l1.6-.2a7.5 7.5 0 001.7.7l1 1.3a1.8 1.8 0 002.8 0l1-1.3a7.5 7.5 0 001.7-.7l1.6.2a1.8 1.8 0 002-2l-.2-1.6a7.5 7.5 0 00.7-1.7l1.3-1z" />
+    ),
+  },
 ];
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const systemStatus = useAppStore((s) => s.systemStatus);
-  const wsConnected = useAppStore((s) => s.wsConnected);
 
   return (
-    <aside className="w-64 bg-base-200 min-h-screen flex flex-col">
-      <div className="p-4 border-b border-base-300">
-        <h1 className="text-lg font-bold">PolyMarket LR</h1>
-        <p className="text-xs opacity-60">撤单监控系统</p>
+    <aside className="terminal-sidebar hidden flex-col py-4 md:flex">
+      <div className="px-5 pb-6">
+        <div className="mb-4 flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--terminal-panel-high)] text-[var(--terminal-muted)]">
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+            </svg>
+          </div>
+          <div className="min-w-0">
+            <div className="truncate text-[18px] font-bold text-[var(--terminal-primary-text)]">
+              流动性风控终端
+            </div>
+            <div className="terminal-label">当前会话</div>
+          </div>
+        </div>
+        <Link href="/accounts" className="terminal-action primary w-full">
+          开始交易
+        </Link>
       </div>
 
-      <nav className="flex-1 p-2">
-        <ul className="menu">
-          {navItems.map((item) => (
-            <li key={item.href}>
-              <Link
-                href={item.href}
-                className={pathname === item.href ? "active" : ""}
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-5 w-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
+      <nav className="flex-1 px-2">
+        <ul className="flex flex-col gap-1">
+          {navItems.map((item) => {
+            const active = pathname === item.href;
+            return (
+              <li key={item.href}>
+                <Link
+                  href={item.href}
+                  className={`flex items-center gap-3 px-5 py-3 text-[12px] font-bold tracking-[0.05em] transition-colors ${
+                    active
+                      ? "border-r-2 border-[var(--terminal-primary-text)] bg-[var(--terminal-primary-soft)] text-[var(--terminal-primary-text)]"
+                      : "text-[var(--terminal-muted)] hover:bg-[var(--terminal-panel-high)] hover:text-[var(--terminal-text)]"
+                  }`}
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d={item.icon}
-                  />
-                </svg>
-                {item.label}
-              </Link>
-            </li>
-          ))}
+                  <svg className="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    {item.icon}
+                  </svg>
+                  {item.label}
+                </Link>
+              </li>
+            );
+          })}
         </ul>
       </nav>
-
-      <div className="p-4 border-t border-base-300 text-xs space-y-1">
-        <div className="flex items-center gap-2">
-          <span
-            className={`badge badge-xs ${wsConnected ? "badge-success" : "badge-error"}`}
-          />
-          <span>WS {wsConnected ? "已连接" : "已断开"}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span
-            className={`badge badge-xs ${systemStatus.wsConnected ? "badge-success" : "badge-warning"}`}
-          />
-          <span>CLOB 数据源 {systemStatus.wsConnected ? "在线" : "离线"}</span>
-        </div>
-        <div className="opacity-60">
-          {systemStatus.totalAccounts} 个账户 | {systemStatus.totalMarkets} 个市场
-        </div>
-      </div>
     </aside>
   );
 }

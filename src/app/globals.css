@@ -1,2 +1,300 @@
 @import "tailwindcss";
 @plugin "daisyui";
+
+:root {
+  --terminal-bg: #0c0e17;
+  --terminal-surface: #11131c;
+  --terminal-panel: #161926;
+  --terminal-panel-soft: #191b24;
+  --terminal-panel-high: #282933;
+  --terminal-border: #242938;
+  --terminal-border-strong: #414754;
+  --terminal-text: #e1e1ef;
+  --terminal-muted: #c1c6d7;
+  --terminal-dim: #8b90a0;
+  --terminal-primary: #4a8eff;
+  --terminal-primary-soft: rgba(74, 142, 255, 0.16);
+  --terminal-primary-text: #adc7ff;
+  --terminal-positive: #66df75;
+  --terminal-negative: #ff525e;
+  --terminal-warning: #ffb3b2;
+}
+
+[data-theme="dark"] {
+  --color-base-100: var(--terminal-panel);
+  --color-base-200: var(--terminal-panel-soft);
+  --color-base-300: var(--terminal-border);
+  --color-base-content: var(--terminal-text);
+  --color-primary: var(--terminal-primary);
+  --color-primary-content: #ffffff;
+  --color-success: var(--terminal-positive);
+  --color-warning: var(--terminal-warning);
+  --color-error: var(--terminal-negative);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--terminal-bg);
+  color: var(--terminal-text);
+}
+
+body {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  letter-spacing: 0;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--terminal-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--terminal-border-strong);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--terminal-dim);
+}
+
+.terminal-shell {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--terminal-bg);
+  color: var(--terminal-text);
+}
+
+.terminal-topbar {
+  height: 28px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--terminal-border-strong);
+  background: var(--terminal-surface);
+}
+
+.terminal-sidebar {
+  width: 320px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--terminal-border-strong);
+  background: #1b1e28;
+}
+
+.terminal-workspace {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--terminal-bg);
+}
+
+.terminal-main {
+  height: 100%;
+  overflow: auto;
+  background: var(--terminal-bg);
+}
+
+.terminal-statusbar {
+  height: 28px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--terminal-border-strong);
+  background: var(--terminal-surface);
+  color: var(--terminal-muted);
+}
+
+.terminal-panel {
+  border: 1px solid var(--terminal-border);
+  background: var(--terminal-panel);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.terminal-panel-header {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--terminal-border);
+  background: var(--terminal-panel-soft);
+  padding: 0 10px;
+}
+
+.terminal-label {
+  color: var(--terminal-muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.terminal-data {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+}
+
+.terminal-muted {
+  color: var(--terminal-muted);
+}
+
+.terminal-dim {
+  color: var(--terminal-dim);
+}
+
+.terminal-positive {
+  color: var(--terminal-positive);
+}
+
+.terminal-negative {
+  color: var(--terminal-negative);
+}
+
+.terminal-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--terminal-dim);
+}
+
+.terminal-status-dot.ok {
+  background: var(--terminal-positive);
+}
+
+.terminal-status-dot.warn {
+  background: var(--terminal-warning);
+}
+
+.terminal-status-dot.bad {
+  background: var(--terminal-negative);
+}
+
+.terminal-action {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--terminal-border-strong);
+  background: transparent;
+  padding: 0 12px;
+  color: var(--terminal-text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.terminal-action:hover {
+  border-color: var(--terminal-muted);
+  background: var(--terminal-panel-high);
+}
+
+.terminal-action.primary {
+  border-color: var(--terminal-primary);
+  background: #087bf7;
+  color: #ffffff;
+}
+
+.terminal-action.danger {
+  border-color: #b00010;
+  background: #b00010;
+  color: #ffffff;
+}
+
+.terminal-action.ghost {
+  background: transparent;
+}
+
+.card {
+  border: 1px solid var(--terminal-border) !important;
+  background: var(--terminal-panel) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.modal-box {
+  border: 1px solid var(--terminal-border-strong) !important;
+  background: var(--terminal-panel-high) !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+}
+
+.modal-backdrop {
+  background: rgba(12, 14, 23, 0.72) !important;
+  backdrop-filter: blur(3px);
+}
+
+.btn {
+  min-height: 30px;
+  height: 30px;
+  border-radius: 2px !important;
+  box-shadow: none !important;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.btn-sm,
+.btn-xs {
+  min-height: 26px;
+  height: 26px;
+}
+
+.input,
+.select,
+.textarea {
+  border-color: var(--terminal-border-strong) !important;
+  background: var(--terminal-bg) !important;
+  border-radius: 2px !important;
+  color: var(--terminal-text) !important;
+  box-shadow: none !important;
+}
+
+.input:focus,
+.select:focus,
+.textarea:focus {
+  border-color: var(--terminal-primary) !important;
+  outline: 1px solid var(--terminal-primary) !important;
+  outline-offset: 0;
+}
+
+.badge {
+  border-radius: 2px !important;
+  border-color: var(--terminal-border-strong);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.table :where(th, td) {
+  border-color: var(--terminal-border) !important;
+  background: transparent !important;
+}

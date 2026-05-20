@@ -15,7 +15,7 @@ export async function POST(request: Request) {
 
     if (!name || !privateKey) {
       return NextResponse.json(
-        { error: "name and privateKey are required" },
+        { error: "账户名称和私钥不能为空" },
         { status: 400 },
       );
     }

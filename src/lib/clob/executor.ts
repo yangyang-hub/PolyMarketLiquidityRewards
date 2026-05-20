@@ -1,6 +1,6 @@
 import Decimal from "decimal.js";
-import { ClobClient } from "@polymarket/clob-client";
-import type { OpenOrder, MarketReward, OrdersScoring } from "@polymarket/clob-client";
+import { AssetType, ClobClient, OrderType, Side } from "@polymarket/clob-client-v2";
+import type { ApiKeyCreds, OpenOrder, MarketReward, OrdersScoring } from "@polymarket/clob-client-v2";
 import type { AccountConfig } from "../types";
 import { createClobClient } from "./client";
 
@@ -61,11 +61,13 @@ export function minCostAdjustedSize(price: Decimal): Decimal {
 
 export class ClobExecutor {
   private client: ClobClient;
+  private account: AccountConfig;
   private signatureType: number;
   private funderAddress?: string;
   public accountName: string;
 
   constructor(account: AccountConfig) {
+    this.account = account;
     this.client = createClobClient(account);
     this.accountName = account.name;
     this.signatureType = account.signatureType;
@@ -73,15 +75,8 @@ export class ClobExecutor {
     console.log(`[${this.accountName}] ClobExecutor created: signatureType=${this.signatureType}, funderAddress=${this.funderAddress || 'none'}`);
   }
 
-  private rebuildClient(creds: any): void {
-    this.client = new ClobClient(
-      this.client.host,
-      this.client.chainId,
-      this.client.signer,
-      creds,
-      this.signatureType,
-      this.funderAddress,
-    );
+  private rebuildClient(creds: ApiKeyCreds): void {
+    this.client = createClobClient(this.account, creds);
   }
 
   async initApiKeys(): Promise<void> {
@@ -129,10 +124,10 @@ export class ClobExecutor {
       const resp = await this.client.createAndPostOrder({
         tokenID: tokenId,
         price: price.toNumber(),
-        side: "BUY" as any,
+        side: Side.BUY,
         size: size.toNumber(),
         expiration: 0,
-      }, undefined, undefined, undefined, true);
+      }, undefined, OrderType.GTC, true);
       return resp?.orderID || resp?.id || null;
     } catch (e: any) {
       console.error(`[${this.accountName}] BUY failed:`, e.message);
@@ -165,10 +160,10 @@ export class ClobExecutor {
       const resp = await this.client.createAndPostOrder({
         tokenID: tokenId,
         price: price.toNumber(),
-        side: "SELL" as any,
+        side: Side.SELL,
         size: size.toNumber(),
         expiration: 0,
-      }, undefined, undefined, undefined, true);
+      }, undefined, OrderType.GTC, true);
       return resp?.orderID || resp?.id || null;
     } catch (e: any) {
       console.error(`[${this.accountName}] SELL failed:`, e.message);
@@ -233,7 +228,7 @@ export class ClobExecutor {
   async getCollateralBalance(): Promise<number> {
     try {
       const resp = await this.client.getBalanceAllowance({
-        asset_type: "COLLATERAL" as any,
+        asset_type: AssetType.COLLATERAL,
       });
       const rawBalance = parseFloat(resp?.balance || "0");
       const balance = rawBalance / 1e6;
@@ -248,7 +243,7 @@ export class ClobExecutor {
   /** Ask CLOB server to refresh its cached allowance for this wallet */
   async refreshAllowanceCache(): Promise<void> {
     try {
-      await this.client.updateBalanceAllowance({ asset_type: "COLLATERAL" as any });
+      await this.client.updateBalanceAllowance({ asset_type: AssetType.COLLATERAL });
       console.log(`[${this.accountName}] Allowance cache refreshed`);
     } catch (e: any) {
       console.warn(`[${this.accountName}] refreshAllowanceCache failed:`, e.message);

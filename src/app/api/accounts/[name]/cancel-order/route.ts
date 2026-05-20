@@ -9,11 +9,11 @@ export async function POST(
   const body = await request.json();
   const orderId = body.orderId;
   if (!orderId) {
-    return NextResponse.json({ error: "orderId is required" }, { status: 400 });
+    return NextResponse.json({ error: "订单编号不能为空" }, { status: 400 });
   }
   const ok = await engineManager.cancelOrder(name, orderId);
   if (!ok) {
-    return NextResponse.json({ error: "Cancel failed" }, { status: 400 });
+    return NextResponse.json({ error: "撤单失败" }, { status: 400 });
   }
   return NextResponse.json({ status: "cancelled", orderId });
 }

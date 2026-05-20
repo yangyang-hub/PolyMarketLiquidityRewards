@@ -8,7 +8,7 @@ export async function POST(
   const { name } = await params;
   const ok = await engineManager.startAccount(name);
   if (!ok) {
-    return NextResponse.json({ error: `Account '${name}' not found` }, { status: 404 });
+    return NextResponse.json({ error: `未找到账户：${name}` }, { status: 404 });
   }
   return NextResponse.json({ status: "started", name });
 }

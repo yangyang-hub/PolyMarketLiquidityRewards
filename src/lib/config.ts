@@ -4,6 +4,17 @@ import type { StrategyConfig } from "./types";
 
 export const defaultConfig: StrategyConfig = {
   cancelDepthLevel: 2,
+  minBookNotionalUsd: 0,
+  volumeDropWindowSec: 10,
+  volumeDropPercent: 0,
+  buyPressureWindowSec: 10,
+  buyPressureUsd: 0,
+  cancelFollowWindowSec: 10,
+  cancelFollowDropPercent: 0,
+  cancelFollowDepthLevels: 10,
+  orderResetEnabled: false,
+  orderResetMinMinutes: 5,
+  orderResetMaxMinutes: 10,
 };
 
 function envInt(key: string, fallback: number): number {

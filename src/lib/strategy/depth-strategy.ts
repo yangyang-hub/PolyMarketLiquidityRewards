@@ -1,6 +1,8 @@
 import Decimal from "decimal.js";
 import type { OrderBook } from "../types";
 
+const ZERO = new Decimal(0);
+
 // --- Cancel decision ---
 
 export function shouldCancelDepthOrder(
@@ -28,4 +30,63 @@ export function shouldCancelDepthOrder(
   }
 
   return shouldCancel;
+}
+
+export function bidNotionalAbovePrice(book: OrderBook, orderPrice: Decimal): Decimal {
+  return sumNotional(
+    book.bids.filter((level) => level.price.greaterThan(orderPrice)),
+  );
+}
+
+export function protectedBidNotional(book: OrderBook, orderPrice: Decimal): Decimal {
+  return sumNotional(
+    book.bids.filter((level) => level.price.greaterThanOrEqualTo(orderPrice)),
+  );
+}
+
+export function topBidNotional(book: OrderBook, levels: number): Decimal {
+  if (levels <= 0) return ZERO;
+  return sumNotional(book.bids.slice(0, levels));
+}
+
+export function shouldCancelMinBookNotional(
+  book: OrderBook,
+  orderPrice: Decimal,
+  isBuy: boolean,
+  minNotionalUsd: number,
+): boolean {
+  if (!isBuy || minNotionalUsd <= 0) return false;
+
+  const notional = bidNotionalAbovePrice(book, orderPrice);
+  const shouldCancel = notional.lessThan(minNotionalUsd);
+
+  if (shouldCancel) {
+    console.log(
+      `[DepthStrategy] CANCEL token=${book.tokenId.slice(0, 12)}... orderPrice=${orderPrice} aboveBidNotional=$${notional.toDecimalPlaces(2)} min=$${minNotionalUsd}`,
+    );
+  }
+
+  return shouldCancel;
+}
+
+export function askReductionNotional(prev: OrderBook, next: OrderBook): Decimal {
+  const nextAskSizeByPrice = new Map(next.asks.map((level) => [level.price.toString(), level.size]));
+  let total = ZERO;
+
+  for (const prevLevel of prev.asks) {
+    const nextSize = nextAskSizeByPrice.get(prevLevel.price.toString()) ?? ZERO;
+    if (prevLevel.size.greaterThan(nextSize)) {
+      total = total.plus(prevLevel.price.times(prevLevel.size.minus(nextSize)));
+    }
+  }
+
+  return total;
+}
+
+function sumNotional(levels: { price: Decimal; size: Decimal }[]): Decimal {
+  let total = ZERO;
+  for (const level of levels) {
+    total = total.plus(level.price.times(level.size));
+  }
+  return total;
 }
