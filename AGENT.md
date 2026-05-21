@@ -93,6 +93,7 @@ The `data/` directory is gitignored. Keep `data/app.db` and `data/.encryption-ke
 - `src/lib/db/crypto.ts`: private-key encryption/decryption and local encryption-key management.
 - `src/lib/strategy/depth-strategy.ts`: shared order-book notional and depth-position calculations used by cancellation rules.
 - `electron/` and `scripts/`: Electron main/preload code plus build/package helpers.
+- `scripts/script-utils.mjs`: shared helpers for invoking local Node CLIs without relying on `npx`; this avoids Windows `.cmd` resolution failures in packaging scripts.
 - `vendor/ethersproject-*-stub`: local package overrides required by the current dependency tree.
 
 ## Startup Flow
@@ -166,9 +167,11 @@ Before handing off code changes, run the most relevant commands:
 - `npm run lint` for TypeScript/ESLint issues.
 - `npm run build` for production build and Next.js integration issues.
 - For desktop packaging changes, run the relevant `desktop:*` script.
+- On Windows, run packaging from a local drive path, not a UNC path such as `\\tsclient\...`; `cmd.exe` falls back to `C:\Windows` for UNC working directories.
 
 If verification cannot be run because of missing network, credentials, platform requirements, or long-running packaging constraints, state that clearly in the final response.
 
 ## Sync Log
 
+- 2026-05-21: Updated packaging scripts to avoid nested `npm run` and `npx` so Windows builds resolve local CLIs reliably. Documented the UNC-path packaging limitation in `README.md` and ignored generated Electron packaging directories.
 - 2026-05-21: Created this `AGENT.md` from the current README, package scripts, and source structure. No business code was changed in this update.

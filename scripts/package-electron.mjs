@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "child_process";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
+import { packageBin, runNode, runNodeCli } from "./script-utils.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -17,16 +17,20 @@ const builderArgs = args.filter((arg) =>
 );
 const finalBuilderArgs = builderArgs.length > 0 ? builderArgs : ["--win", "nsis"];
 
-function run(file, args) {
-  console.log(`\n> ${file} ${args.join(" ")}`);
-  execFileSync(file, args, { cwd: ROOT, stdio: "inherit" });
-}
-
-run("node", ["scripts/prepare-electron-resources.mjs", ...prepareArgs]);
-run("node", ["scripts/build-electron.mjs"]);
+runNode(
+  ROOT,
+  ["scripts/prepare-electron-resources.mjs", ...prepareArgs],
+  `node scripts/prepare-electron-resources.mjs ${prepareArgs.join(" ")}`.trim(),
+);
+runNode(ROOT, ["scripts/build-electron.mjs"], "node scripts/build-electron.mjs");
 
 if (skipBuilder) {
   console.log("\n已跳过 electron-builder。");
 } else {
-  run("npx", ["electron-builder", ...finalBuilderArgs]);
+  runNodeCli(
+    ROOT,
+    "electron-builder",
+    packageBin(ROOT, "electron-builder", "cli.js"),
+    finalBuilderArgs,
+  );
 }

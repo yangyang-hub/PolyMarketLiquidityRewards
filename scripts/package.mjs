@@ -26,6 +26,7 @@ import {
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { get as httpsGet } from "https";
+import { packageBin, runNodeCli } from "./script-utils.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -43,11 +44,6 @@ const BETTER_SQLITE3_URL =
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function run(file, args) {
-  console.log(`\n> ${file} ${args.join(" ")}`);
-  execFileSync(file, args, { cwd: ROOT, stdio: "inherit" });
-}
 
 /** Download a file via HTTPS, following redirects. */
 function download(url, dest) {
@@ -98,7 +94,7 @@ async function extractTarGz(tarPath, destDir) {
 // ---------------------------------------------------------------------------
 
 console.log("\n========== Step 1: Next.js build ==========");
-run("npx", ["next", "build"]);
+runNodeCli(ROOT, "next", packageBin(ROOT, "next", "dist", "bin", "next"), ["build"]);
 
 // ---------------------------------------------------------------------------
 // Step 2: esbuild compile server.ts → server.js

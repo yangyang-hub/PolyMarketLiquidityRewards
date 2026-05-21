@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
-import { execFileSync, spawn } from "child_process";
+import { spawn } from "child_process";
 import { get } from "http";
 import net from "net";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
+import { packageBin, runNode, spawnNodeCli } from "./script-utils.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -16,11 +17,6 @@ function run(file, args, env = {}) {
     shell: process.platform === "win32",
     stdio: "inherit",
   });
-}
-
-function runSync(file, args) {
-  console.log(`\n> ${file} ${args.join(" ")}`);
-  execFileSync(file, args, { cwd: ROOT, stdio: "inherit" });
 }
 
 function getFreePort() {
@@ -71,7 +67,7 @@ const port = await getFreePort();
 const url = `http://127.0.0.1:${port}`;
 const dataDir = resolve(ROOT, "data", "electron-dev");
 
-runSync("node", ["scripts/build-electron.mjs"]);
+runNode(ROOT, ["scripts/build-electron.mjs"], "node scripts/build-electron.mjs");
 
 const server = run("npm", ["run", "dev"], {
   HOST: "127.0.0.1",
@@ -81,11 +77,17 @@ const server = run("npm", ["run", "dev"], {
 
 await waitForHttp(url);
 
-const electron = run("npx", ["electron", "dist-electron/main.js"], {
-  ELECTRON_DEV_SERVER_URL: url,
-  APP_DATA_DIR: dataDir,
-  APP_ROOT: ROOT,
-});
+const electron = spawnNodeCli(
+  ROOT,
+  "electron",
+  packageBin(ROOT, "electron", "cli.js"),
+  ["dist-electron/main.js"],
+  {
+    ELECTRON_DEV_SERVER_URL: url,
+    APP_DATA_DIR: dataDir,
+    APP_ROOT: ROOT,
+  },
+);
 
 electron.on("exit", (code) => {
   server.kill();

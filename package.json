@@ -15,7 +15,7 @@
     "desktop:dist": "node scripts/package-electron.mjs --win nsis",
     "desktop:dist:portable": "node scripts/package-electron.mjs --win portable",
     "package:legacy": "node scripts/package.mjs",
-    "package": "npm run desktop:dist"
+    "package": "node scripts/package-electron.mjs --win nsis"
   },
   "build": {
     "appId": "com.polymarket.liquidityrewards",

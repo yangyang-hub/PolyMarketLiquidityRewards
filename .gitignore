@@ -20,6 +20,10 @@
 # production
 /build
 /dist
+/dist-electron
+/dist-server
+/release
+/.cache
 
 # misc
 .DS_Store

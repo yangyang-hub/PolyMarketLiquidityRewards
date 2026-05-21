@@ -227,6 +227,12 @@ Gamma API **不负责盘口数据**。
 npm run package
 ```
 
+Windows 打包注意：
+
+- 请在本地盘符路径下运行，例如 `C:\workspace\node\PolyMarketLiquidityRewards`。
+- 不要从 `\\tsclient\...` 这类 UNC 共享路径直接运行 `npm run package`；Windows `cmd.exe` 不支持把 UNC 路径作为当前目录，会退回到 `C:\Windows` 并导致找不到 `package.json`。
+- 打包脚本会直接调用 `node_modules` 里的本地 CLI，不依赖全局 `npx`。
+
 常用桌面端命令：
 
 ```bash
@@ -308,4 +314,4 @@ npm run desktop:dist:portable  # Windows Electron 便携包
 - 每次代码变更后都要同步检查 `AGENT.md`。
 - 如果变更影响架构、命令、依赖、API、环境变量、数据存储、安全假设、打包流程或用户工作流，需要同步更新 `AGENT.md` 的对应章节。
 - 如果代码变更不需要修改 `AGENT.md` 正文，也要在该文件的 `Sync Log` 记录已检查。
-- 不要提交私钥、`.env`、`data/app.db`、`data/.encryption-key`、`.next/`、`dist/`、`release/` 等本地运行或构建产物。
+- 不要提交私钥、`.env`、`data/app.db`、`data/.encryption-key`、`.next/`、`dist/`、`dist-server/`、`dist-electron/`、`release/` 等本地运行或构建产物。

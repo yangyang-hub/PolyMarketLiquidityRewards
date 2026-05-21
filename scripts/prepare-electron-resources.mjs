@@ -13,6 +13,7 @@ import { get as httpsGet } from "https";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 import { build } from "esbuild";
+import { packageBin, runNodeCli } from "./script-utils.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -33,11 +34,6 @@ const NODE_ABI = "v115";
 const BETTER_SQLITE3_URL =
   `https://github.com/WiseLibs/better-sqlite3/releases/download/${BETTER_SQLITE3_VERSION}/` +
   `better-sqlite3-${BETTER_SQLITE3_VERSION}-node-${NODE_ABI}-win32-x64.tar.gz`;
-
-function run(file, args) {
-  console.log(`\n> ${file} ${args.join(" ")}`);
-  execFileSync(file, args, { cwd: ROOT, stdio: "inherit" });
-}
 
 function download(url, dest) {
   return new Promise((resolveDone, reject) => {
@@ -92,7 +88,7 @@ async function cachedDownload(url, cacheName, dest) {
 
 console.log("\n========== 1. 构建 Next.js ==========");
 if (!skipNextBuild) {
-  run("npx", ["next", "build"]);
+  runNodeCli(ROOT, "next", packageBin(ROOT, "next", "dist", "bin", "next"), ["build"]);
 } else {
   console.log("  已跳过 Next.js 构建");
 }
