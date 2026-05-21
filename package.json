@@ -41,11 +41,16 @@
       {
         "from": "dist-server",
         "to": "server"
+      },
+      {
+        "from": ".cache/electron/logo.ico",
+        "to": "logo.ico"
       }
     ],
     "asar": true,
     "npmRebuild": false,
     "win": {
+      "icon": ".cache/electron/logo.ico",
       "target": [
         {
           "target": "nsis",
@@ -61,6 +66,9 @@
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "nsis": {
+      "include": "electron/installer.nsh",
+      "installerIcon": ".cache/electron/logo.ico",
+      "uninstallerIcon": ".cache/electron/logo.ico",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,

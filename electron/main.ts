@@ -1,6 +1,6 @@
-import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, shell } from "electron";
 import { spawn, type ChildProcess } from "child_process";
-import { createWriteStream, existsSync, mkdirSync } from "fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync } from "fs";
 import { get, request } from "http";
 import net from "net";
 import path from "path";
@@ -13,11 +13,17 @@ let isQuitting = false;
 let logDir = "";
 let dataDir = "";
 
-function getAssetPath(...segments: string[]): string {
+function getIconPath(): string | undefined {
   const appRoot = process.env.APP_ROOT || app.getAppPath();
-  return app.isPackaged
-    ? path.join(process.resourcesPath, ...segments)
-    : path.join(appRoot, ...segments);
+  const candidates = app.isPackaged
+    ? [
+        path.join(process.resourcesPath, "logo.ico"),
+        path.join(process.resourcesPath, "public", "logo.png"),
+        path.join(appRoot, "public", "logo.png"),
+      ]
+    : [path.join(appRoot, "public", "logo.png")];
+
+  return candidates.find((candidate) => existsSync(candidate));
 }
 
 function getServerDir(): string {
@@ -65,6 +71,25 @@ function patchConsoleToFile() {
   };
 }
 
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (char) => {
+    switch (char) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case "\"":
+        return "&quot;";
+      case "'":
+        return "&#39;";
+      default:
+        return char;
+    }
+  });
+}
+
 function loadingHtml(message: string): string {
   return `data:text/html;charset=utf-8,${encodeURIComponent(`
     <!doctype html>
@@ -75,17 +100,40 @@ function loadingHtml(message: string): string {
           body { margin: 0; height: 100vh; display: grid; place-items: center; background: #0d111a; color: #d7def2; font-family: "Microsoft YaHei", Arial, sans-serif; }
           section { width: 520px; border: 1px solid #293246; background: #151b28; padding: 32px; }
           h1 { margin: 0 0 14px; font-size: 24px; }
-          p { margin: 0; color: #8f9ab4; line-height: 1.7; }
+          p { margin: 0; color: #8f9ab4; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
         </style>
       </head>
       <body>
         <section>
           <h1>流动性风控终端</h1>
-          <p>${message}</p>
+          <p>${escapeHtml(message)}</p>
         </section>
       </body>
     </html>
   `)}`;
+}
+
+function readLogTail(file: string, maxChars = 4_000): string {
+  try {
+    if (!existsSync(file)) return "";
+    const content = readFileSync(file, "utf-8");
+    return content.slice(-maxChars).trim();
+  } catch {
+    return "";
+  }
+}
+
+function backendFailureDetail(message: string): string {
+  const stderrTail = readLogTail(path.join(logDir, "backend-error.log"));
+  const stdoutTail = readLogTail(path.join(logDir, "backend.log"));
+  const details = [
+    message,
+    `日志目录：${logDir}`,
+    stderrTail ? `backend-error.log:\n${stderrTail}` : "",
+    stdoutTail ? `backend.log:\n${stdoutTail}` : "",
+  ].filter(Boolean);
+
+  return details.join("\n\n");
 }
 
 function getFreePort(): Promise<number> {
@@ -212,6 +260,9 @@ async function startBackend(): Promise<string> {
 
   const port = await getFreePort();
   serverUrl = `http://127.0.0.1:${port}`;
+  console.log(`启动本地后端：${nodePath} ${serverEntry}`);
+  console.log(`本地后端目录：${serverDir}`);
+  console.log(`本地后端地址：${serverUrl}`);
 
   const stdout = createWriteStream(path.join(logDir, "backend.log"), { flags: "a" });
   const stderr = createWriteStream(path.join(logDir, "backend-error.log"), { flags: "a" });
@@ -233,16 +284,34 @@ async function startBackend(): Promise<string> {
   serverProcess.stdout?.pipe(stdout);
   serverProcess.stderr?.pipe(stderr);
 
-  serverProcess.on("exit", (code) => {
-    console.warn(`后端进程已退出，代码：${code ?? "未知"}`);
+  const earlyExit = new Promise<never>((_, reject) => {
+    serverProcess?.once("error", (error) => {
+      reject(new Error(backendFailureDetail(`后端进程启动失败：${error.message}`)));
+    });
+
+    serverProcess?.once("exit", (code, signal) => {
+      const reason = signal ? `信号：${signal}` : `代码：${code ?? "未知"}`;
+      reject(new Error(backendFailureDetail(`后端进程在服务就绪前退出，${reason}`)));
+    });
   });
 
-  await waitForHttp(serverUrl);
+  serverProcess.on("exit", (code, signal) => {
+    const reason = signal ? `信号：${signal}` : `代码：${code ?? "未知"}`;
+    console.warn(`后端进程已退出，${reason}`);
+  });
+
+  await Promise.race([
+    waitForHttp(serverUrl, 90_000).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(backendFailureDetail(message));
+    }),
+    earlyExit,
+  ]);
   return serverUrl;
 }
 
 function createWindow() {
-  const icon = getAssetPath("public", "logo.png");
+  const icon = getIconPath();
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -250,7 +319,7 @@ function createWindow() {
     minHeight: 700,
     title: "流动性风控终端",
     show: false,
-    icon: existsSync(icon) ? icon : undefined,
+    icon,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       nodeIntegration: false,
@@ -289,10 +358,19 @@ function createWindow() {
 }
 
 function createTray() {
-  const icon = getAssetPath("public", "logo.png");
-  if (!existsSync(icon)) return;
+  const icon = getIconPath();
+  if (!icon) {
+    console.warn("未找到托盘图标，跳过托盘创建");
+    return;
+  }
 
-  tray = new Tray(icon);
+  const trayIcon = nativeImage.createFromPath(icon);
+  if (trayIcon.isEmpty()) {
+    console.warn(`托盘图标不可用，跳过托盘创建：${icon}`);
+    return;
+  }
+
+  tray = new Tray(trayIcon);
   tray.setToolTip("流动性风控终端");
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "显示主窗口", click: () => mainWindow?.show() },
@@ -323,7 +401,7 @@ async function bootstrap() {
   } catch (e) {
     const message = e instanceof Error ? e.message : "本地后端启动失败";
     console.error(message);
-    await mainWindow?.loadURL(loadingHtml(`${message}。请从托盘菜单打开日志目录排查。`));
+    await mainWindow?.loadURL(loadingHtml(`${message}\n\n请从托盘菜单打开日志目录排查，或直接打开：${logDir}`));
   }
 }
 

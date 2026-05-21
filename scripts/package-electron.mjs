@@ -17,6 +17,7 @@ const builderArgs = args.filter((arg) =>
 );
 const finalBuilderArgs = builderArgs.length > 0 ? builderArgs : ["--win", "nsis"];
 
+runNode(ROOT, ["scripts/prepare-electron-icons.mjs"], "node scripts/prepare-electron-icons.mjs");
 runNode(
   ROOT,
   ["scripts/prepare-electron-resources.mjs", ...prepareArgs],

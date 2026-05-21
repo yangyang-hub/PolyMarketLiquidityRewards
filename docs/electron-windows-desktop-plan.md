@@ -37,6 +37,8 @@ PolyMarket 风控桌面端.exe
 
 - Electron 打包后的 GUI 程序不会天然弹出命令行窗口。
 - 后端通过 `spawn(node.exe, ["server.js"], { windowsHide: true, shell: false })` 隐藏启动，不经过 `.bat`、`.cmd` 或 PowerShell。
+- 打包脚本从 `public/logo.png` 生成 `.cache/electron/logo.ico`，供安装包、卸载程序、桌面快捷方式和开始菜单快捷方式使用。
+- 打包后的 Electron 托盘优先读取外部 `resources/logo.ico`；不要只依赖 app 包内的 `public/logo.png`。
 - `better-sqlite3` 继续运行在内置 Node 26 环境，避免 Electron 主进程原生模块 ABI 不匹配；当前项目不再兼容低版本 Node。
 - 打包脚本会在 `next build` 前为根目录 `node_modules/better-sqlite3` 准备 Node 26 Windows 预编译模块，避免构建期 API 路由导入数据库时触发 node-gyp。
 - Electron Builder 关闭 `npmRebuild`，避免为根项目依赖触发 node-gyp/Python；Windows 后端原生模块由打包脚本下载并放入 `dist-server`。
@@ -150,13 +152,14 @@ npm run desktop:dist:portable
 
 `desktop:dist` 会依次执行：
 
-1. `next build`
-2. 复制 `.next/standalone`、`.next/static`、`public`
-3. 用 esbuild 编译 `server.ts` 为 `dist-server/server.js`
-4. 下载 Windows `node.exe`
-5. 下载 Windows 版 `better_sqlite3.node`
-6. 编译 Electron 主进程和 preload
-7. 调用 `electron-builder --win nsis`
+1. 从 `public/logo.png` 生成 `.cache/electron/logo.ico`
+2. `next build`
+3. 复制 `.next/standalone`、`.next/static`、`public`
+4. 用 esbuild 编译 `server.ts` 为 `dist-server/server.js`
+5. 下载 Windows `node.exe`
+6. 下载 Windows 版 `better_sqlite3.node`
+7. 编译 Electron 主进程和 preload
+8. 调用 `electron-builder --win nsis`
 
 ## 无控制台窗口策略
 
@@ -177,11 +180,15 @@ spawn(nodePath, [serverEntry], {
 });
 ```
 
+后端 HTTP 服务应先完成监听，随后后台恢复上次启用的账户。账户自动启动中的网络请求不能阻塞 Electron 的本地健康检查。
+
 日志会写入：
 
 - `backend.log`
 - `backend-error.log`
 - `electron-main.log`
+
+如果后端在就绪前退出或启动超时，主窗口会显示日志目录，并附带 `backend-error.log` / `backend.log` 尾部内容。
 
 ## 前端设计边界
 
@@ -213,5 +220,5 @@ window.desktopApp.openLogDir()
 ## 注意事项
 
 - 在 Linux/macOS 上交叉生成 Windows 安装包可能需要 Wine；如果环境缺失，可在 Windows 机器执行 `npm run desktop:dist`。
-- 当前 `public/logo.png` 用作窗口和托盘图标。正式发布前建议补一个 Windows `.ico` 图标，并在 `package.json` 的 `build.win.icon` 中配置。
+- 当前 `public/logo.png` 用作窗口和托盘图标，并在打包时自动生成 Windows `.ico` 给安装包和快捷方式使用。
 - `package:legacy` 保留旧的便携脚本，但正式桌面版应使用 `desktop:dist`。

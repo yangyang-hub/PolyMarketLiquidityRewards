@@ -123,10 +123,13 @@ class EngineManager {
     console.log(`[Manager] Initialized with ${this.accountConfigs.length} accounts`);
     this.broadcastSystemStatus();
 
-    // Auto-start accounts that were enabled before restart
+    void this.autoStartEnabledAccounts();
+  }
+
+  private async autoStartEnabledAccounts(): Promise<void> {
     const enabledNames = dbGetEnabledAccountNames();
     if (enabledNames.length > 0) {
-      console.log(`[Manager] Auto-starting ${enabledNames.length} previously enabled accounts: ${enabledNames.join(", ")}`);
+      console.log(`[Manager] Auto-starting ${enabledNames.length} previously enabled accounts in background: ${enabledNames.join(", ")}`);
       for (const name of enabledNames) {
         try {
           await this.startAccount(name);
