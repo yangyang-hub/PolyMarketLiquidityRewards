@@ -1,7 +1,10 @@
 import { createServer, type Server } from "http";
 import next from "next";
 import { WebSocketServer } from "ws";
+import { APP_TIME_ZONE } from "../lib/time";
 import { engineManager } from "../lib/engine/manager";
+
+process.env.TZ ||= APP_TIME_ZONE;
 
 export interface StartServerOptions {
   dev?: boolean;

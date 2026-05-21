@@ -238,6 +238,8 @@ Windows 打包注意：
 - 如果 `npm install` 没有生成根目录 `node_modules/better-sqlite3` 的 `.node` 文件，打包脚本会在 `next build` 前自动安装 Node 26 Windows 预编译模块，避免构建期加载数据库时报错。
 - Electron Builder 已关闭 `npmRebuild`；后端使用 `dist-server` 中的 Node 26 预编译 `better-sqlite3`，不需要本机 Python/node-gyp。
 - Electron Builder 已关闭 Windows exe 资源编辑并跳过 `.exe` 签名；本地未签名安装包不会下载 `winCodeSign.7z`，也不需要 Windows 符号链接权限。
+- 页面顶部不再绘制模拟窗口控制按钮，桌面端使用系统原生最小化、最大化和关闭按钮。
+- 桌面端和内置后端统一使用 `Asia/Shanghai` 时区；`electron-main.log`、`backend.log` 和前端事件时间都会按上海时间显示。
 - 桌面端启动时会先让本地后端监听端口，再在后台恢复上次启用的账户，避免账户网络请求阻塞应用启动。
 - 如果本地后端启动失败，主窗口会显示日志目录路径，并把 `backend-error.log` / `backend.log` 尾部写入错误详情。
 - 当前项目只支持 Node.js 26.x；常用 npm scripts 会在启动前检查 Node 主版本。切换 Node 版本后请重新运行 `npm install --include=optional`。

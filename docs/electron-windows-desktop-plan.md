@@ -40,6 +40,8 @@ PolyMarket 风控桌面端.exe
 - 打包脚本从 `public/logo.png` 生成 `.cache/electron/logo.ico`，供安装包、卸载程序、桌面快捷方式和开始菜单快捷方式使用。
 - 打包后的 Electron 托盘优先读取外部 `resources/logo.ico`；不要只依赖 app 包内的 `public/logo.png`。
 - `better-sqlite3` 继续运行在内置 Node 26 环境，避免 Electron 主进程原生模块 ABI 不匹配；当前项目不再兼容低版本 Node。
+- 页面顶部不绘制模拟窗口控制按钮，最小化、最大化和关闭由系统原生标题栏提供。
+- 桌面端和内置后端统一使用 `Asia/Shanghai` 时区，文件日志和前端事件时间按上海时间展示。
 - 服务端资源必须保留 Next standalone 依赖；打包脚本会把 `node_modules` 改名为 `server-vendor`，Electron 启动后端时通过 `NODE_PATH` 指向它，避免 Electron Builder 过滤 `node_modules` 后导致 `server.js` 无法 `require("next")`。
 - 组装服务端资源时会剔除被 Next 追踪进 standalone 的本地 `data/`、`release/`、`dist*` 和 `.cache` 目录，避免发布本地数据库、密钥或旧构建产物。
 - 打包脚本会在 `next build` 前为根目录 `node_modules/better-sqlite3` 准备 Node 26 Windows 预编译模块，避免构建期 API 路由导入数据库时触发 node-gyp。
@@ -189,6 +191,8 @@ spawn(nodePath, [serverEntry], {
 - `backend.log`
 - `backend-error.log`
 - `electron-main.log`
+
+日志时间使用 `YYYY-MM-DD HH:mm:ss.SSS +08:00` 格式。
 
 如果后端在就绪前退出或启动超时，主窗口会显示日志目录，并附带 `backend-error.log` / `backend.log` 尾部内容。
 

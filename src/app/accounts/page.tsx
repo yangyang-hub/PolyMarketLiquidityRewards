@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, memo, useCallback } from "react";
 import { useAppStore } from "@/stores/appStore";
 import { useApi } from "@/hooks/useApi";
+import { formatShanghaiTime } from "@/lib/time";
 import type { AccountConfigDto, AccountState } from "@/types";
 import StatusBadge from "@/components/StatusBadge";
 import OrderTable from "@/components/OrderTable";
@@ -264,7 +265,7 @@ const AccountCardItem = memo(function AccountCardItem({
                 <div className="text-[10px] uppercase tracking-wider opacity-40">更新</div>
                 <div className="text-sm font-mono font-semibold mt-0.5">
                   {account.lastUpdate
-                    ? new Date(account.lastUpdate).toLocaleTimeString()
+                    ? formatShanghaiTime(account.lastUpdate)
                     : "—"}
                 </div>
               </div>

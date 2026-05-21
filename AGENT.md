@@ -177,6 +177,8 @@ Before handing off code changes, run the most relevant commands:
 - Electron Builder disables Windows exe resource editing with `win.signAndEditExecutable: false` and skips `.exe` signing via `win.signExts: ["!.exe"]`; local unsigned Windows packages should not need `winCodeSign.7z` or symlink privileges.
 - Packaged Electron uses external `resources/logo.ico` for tray icons; do not point packaged tray creation only at `public/logo.png` inside app files.
 - The local HTTP server should become reachable before enabled accounts auto-start; account auto-start runs in the background to avoid desktop startup timeouts.
+- Do not add simulated in-page window controls to the top bar; the desktop app uses native OS minimize, maximize, and close controls.
+- Runtime time zone is `Asia/Shanghai`. Use `src/lib/time.ts` for user-visible or file-log timestamps, and pass `TZ: APP_TIME_ZONE` to bundled backend processes.
 
 If verification cannot be run because of missing network, credentials, platform requirements, or long-running packaging constraints, state that clearly in the final response.
 
@@ -190,6 +192,8 @@ If verification cannot be run because of missing network, credentials, platform 
 - 2026-05-21: Added Electron icon preparation from `public/logo.png` and an NSIS install hook so installer, uninstaller, desktop shortcut, and Start Menu shortcut use the project logo.
 - 2026-05-21: Fixed packaged tray icon lookup to use external `resources/logo.ico` and made enabled-account auto-start run in the background so it cannot block backend readiness.
 - 2026-05-21: Staged Next standalone dependencies as `server-vendor`, added `NODE_PATH` for the bundled backend, and pruned traced local runtime/build directories to avoid missing `next` and leaking local data.
+- 2026-05-21: Removed simulated `-- □ ×` controls from the web top bar because the packaged desktop window already provides native OS controls.
+- 2026-05-21: Standardized desktop/backend runtime timestamps on `Asia/Shanghai`, including Electron main log prefixes, backend console prefixes, frontend event times, and SQLite local update timestamps.
 - 2026-05-21: Disabled Electron Builder Windows exe resource editing in addition to `.exe` signing to avoid `winCodeSign.7z` extraction on machines without symlink privileges.
 - 2026-05-21: Configured Electron Builder to skip `.exe` signing for local Windows packages, avoiding `winCodeSign.7z` symlink extraction failures.
 - 2026-05-21: Migrated the project baseline from Node 20 to Node 26 only, including package engines, Docker image, esbuild targets, Windows bundled `node.exe`, and `better-sqlite3` Node ABI.

@@ -4,6 +4,9 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync } from "fs";
 import { get, request } from "http";
 import net from "net";
 import path from "path";
+import { APP_TIME_ZONE, formatShanghaiDateTime } from "../src/lib/time";
+
+process.env.TZ ||= APP_TIME_ZONE;
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -53,7 +56,7 @@ function patchConsoleToFile() {
   const originalError = console.error.bind(console);
 
   const write = (level: string, args: unknown[]) => {
-    const line = `[${new Date().toISOString()}] [${level}] ${args.map(String).join(" ")}\n`;
+    const line = `[${formatShanghaiDateTime()}] [${level}] ${args.map(String).join(" ")}\n`;
     logFile.write(line);
   };
 
@@ -275,6 +278,7 @@ async function startBackend(): Promise<string> {
         path.join(serverDir, "server-vendor"),
         process.env.NODE_PATH || "",
       ].filter(Boolean).join(path.delimiter),
+      TZ: APP_TIME_ZONE,
       NODE_ENV: "production",
       HOST: "127.0.0.1",
       PORT: String(port),

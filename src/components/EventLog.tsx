@@ -1,6 +1,7 @@
 "use client";
 
 import type { OrderEvent } from "@/types";
+import { formatShanghaiTime } from "@/lib/time";
 
 const typeColors: Record<string, string> = {
   placed: "text-[var(--terminal-primary-text)]",
@@ -35,12 +36,7 @@ export default function EventLog({ events }: { events: OrderEvent[] }) {
           }`}
         >
           <span className="terminal-muted">
-            {new Date(event.timestamp).toLocaleTimeString(undefined, {
-              hour12: false,
-              hour: "2-digit",
-              minute: "2-digit",
-              second: "2-digit",
-            })}
+            {formatShanghaiTime(event.timestamp)}
           </span>
           <span className={typeColors[event.type] || "terminal-muted"}>
             {typeLabels[event.type] || event.type.toUpperCase()}

@@ -56,11 +56,6 @@ export default function ClientLayout({
             <span className="terminal-data terminal-muted">市场：{systemStatus.totalMarkets}</span>
           </div>
         </div>
-        <div className="flex items-center gap-3 terminal-muted">
-          <span className="terminal-data">--</span>
-          <span className="terminal-data">□</span>
-          <span className="terminal-data">×</span>
-        </div>
       </header>
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
