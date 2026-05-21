@@ -40,7 +40,7 @@ PolyMarket 风控桌面端.exe
 - `better-sqlite3` 继续运行在内置 Node 26 环境，避免 Electron 主进程原生模块 ABI 不匹配；当前项目不再兼容低版本 Node。
 - 打包脚本会在 `next build` 前为根目录 `node_modules/better-sqlite3` 准备 Node 26 Windows 预编译模块，避免构建期 API 路由导入数据库时触发 node-gyp。
 - Electron Builder 关闭 `npmRebuild`，避免为根项目依赖触发 node-gyp/Python；Windows 后端原生模块由打包脚本下载并放入 `dist-server`。
-- Electron Builder 通过 `win.signExts: ["!.exe"]` 跳过本地 `.exe` 签名，避免未开启符号链接权限时解压 `winCodeSign.7z` 失败。
+- Electron Builder 通过 `win.signAndEditExecutable: false` 关闭 Windows exe 资源编辑，并通过 `win.signExts: ["!.exe"]` 跳过本地 `.exe` 签名，避免未开启符号链接权限时解压 `winCodeSign.7z` 失败。
 - 后端崩溃日志写入本地日志目录，用户不用面对控制台。
 
 ## 项目结构

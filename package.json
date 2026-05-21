@@ -54,6 +54,7 @@
           ]
         }
       ],
+      "signAndEditExecutable": false,
       "signExts": [
         "!.exe"
       ],
