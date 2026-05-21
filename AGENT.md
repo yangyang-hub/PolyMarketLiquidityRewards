@@ -1,0 +1,174 @@
+# AGENT.md
+
+This file is the working guide for coding agents maintaining this repository.
+Keep it current with the codebase.
+
+## Mandatory Documentation Sync
+
+- After every code change, review this file in the same change set.
+- If the change affects architecture, runtime behavior, commands, dependencies, API routes, environment variables, data storage, security assumptions, packaging, or user workflows, update the relevant section.
+- If a code change does not require content changes here, still add a short entry under "Sync Log" saying the file was checked and no documentation update was needed.
+- Do not commit or expose private keys, database files, encryption keys, local `.env` files, or generated build/runtime directories.
+
+## Project Snapshot
+
+PolyMarketLiquidityRewards is a local Polymarket monitoring and risk-control app. It manages multiple Polymarket accounts, subscribes to CLOB order books, displays live account/order-book state, and automatically cancels buy orders according to configured risk rules.
+
+The current product boundary is "monitoring plus cancellation risk control". The code contains order placement wrappers and order-reset behavior, but this is not a full market-making, backtesting, or external-wallet copy-trading system.
+
+## Stack
+
+- Runtime: Node.js 20+.
+- App framework: Next.js 16 App Router, React 19, TypeScript.
+- UI state: Zustand.
+- Styling: Tailwind CSS 4 and DaisyUI.
+- Server: custom Node HTTP server in `server.ts` and `src/server/start-server.ts`.
+- Browser realtime channel: local WebSocket endpoint at `/ws`.
+- Polymarket realtime channel: CLOB market WebSocket via `src/lib/clob/ws-feed.ts`.
+- Storage: SQLite through `better-sqlite3`.
+- Desktop packaging: Electron and `electron-builder`.
+- Decimal math: `decimal.js`.
+- Polymarket SDK: `@polymarket/clob-client-v2`.
+
+## Main Commands
+
+```bash
+npm install
+npm run dev
+npm run build
+npm run start
+npm run lint
+npm run package
+```
+
+Useful desktop commands:
+
+```bash
+npm run desktop:dev
+npm run desktop:build-main
+npm run desktop:prepare
+npm run desktop:pack
+npm run desktop:dist
+npm run desktop:dist:portable
+```
+
+There is currently no dedicated test script in `package.json`; use `npm run lint` and `npm run build` as the default verification commands unless a task adds tests.
+
+## Runtime Configuration
+
+Supported environment variables:
+
+- `HOST`: HTTP bind host, default `127.0.0.1`.
+- `PORT`: HTTP bind port, default `3000`.
+- `CHAIN_ID`: Polymarket chain id, default `137`.
+- `CLOB_HOST`: CLOB REST host, default `https://clob.polymarket.com`.
+- `CLOB_WS_HOST`: CLOB WebSocket host, default `wss://ws-subscriptions-clob.polymarket.com`.
+- `GAMMA_HOST`: Gamma API host, default `https://gamma-api.polymarket.com`.
+- `APP_DATA_DIR`: runtime data directory, default `data` under the current working directory.
+
+Runtime-generated local data:
+
+- `data/app.db`: SQLite database for accounts and strategy config.
+- `data/.encryption-key`: AES-256-GCM key used to decrypt private keys stored in the database.
+
+The `data/` directory is gitignored. Keep `data/app.db` and `data/.encryption-key` together when backing up; the database is not recoverable without the matching encryption key.
+
+## Architecture Map
+
+- `server.ts`: process entry point; resolves `HOST`, `PORT`, and development mode.
+- `src/server/start-server.ts`: prepares Next.js, creates the HTTP server, handles `/ws` WebSocket upgrades, and initializes `engineManager`.
+- `src/app`: Next.js pages and API routes.
+- `src/components`: reusable UI components for accounts, order tables, order books, status, sidebar, and event logs.
+- `src/hooks`: browser API and WebSocket hooks.
+- `src/stores/appStore.ts`: browser-side Zustand state and WebSocket message reducer.
+- `src/lib/types.ts`: server-side domain and WebSocket message types.
+- `src/types/index.ts`: client-facing DTO/type definitions.
+- `src/lib/engine/manager.ts`: singleton coordinator for account engines, browser clients, CLOB subscriptions, Gamma market discovery, and account/config APIs.
+- `src/lib/engine/engine.ts`: per-account polling, realtime risk checks, cancellations, order reset, scoring checks, and balance/order refresh.
+- `src/lib/clob/client.ts`: CLOB client factory.
+- `src/lib/clob/executor.ts`: CLOB operations such as API key initialization, order placement, cancellation, open-order lookup, scoring, balance, and allowance refresh.
+- `src/lib/clob/ws-feed.ts`: resilient Polymarket CLOB WebSocket feed with local order-book state, snapshot handling, price-change deltas, trade updates, heartbeat, stale detection, and reconnects.
+- `src/lib/gamma/api.ts`: Gamma API lookups for market metadata by token id.
+- `src/lib/db/database.ts`: SQLite schema, migrations, account persistence, enabled-account flags, and strategy config persistence.
+- `src/lib/db/crypto.ts`: private-key encryption/decryption and local encryption-key management.
+- `src/lib/strategy/depth-strategy.ts`: shared order-book notional and depth-position calculations used by cancellation rules.
+- `electron/` and `scripts/`: Electron main/preload code plus build/package helpers.
+- `vendor/ethersproject-*-stub`: local package overrides required by the current dependency tree.
+
+## Startup Flow
+
+1. `server.ts` calls `startServer`.
+2. `startServer` prepares Next.js, creates the HTTP server, installs `/ws` upgrade handling, and initializes `engineManager`.
+3. `engineManager.initialize()` loads account configs from SQLite, creates an `AccountEngine` per account, starts the CLOB WebSocket feed, broadcasts status, and auto-starts accounts that were enabled before restart.
+4. Browser clients connecting to `/ws` are registered by `engineManager.addClient()` and immediately receive a snapshot: system status, account states, account configs without private keys, discovered markets, strategy config, and cached order books.
+
+## Account And Market Flow
+
+- Account management API calls delegate to `engineManager`.
+- Private keys are encrypted before database storage and never sent to the browser after creation/update.
+- Enabled accounts are persisted through the `enabled` column and auto-started on server restart.
+- Running account engines poll CLOB open orders every 15 seconds, refresh collateral balance, check scoring status, and report active token ids.
+- `engineManager.syncSubscriptions()` aggregates active token ids across running engines, subscribes/unsubscribes the shared CLOB WebSocket feed, fetches unknown market metadata from Gamma, and updates browser clients.
+
+## Risk And Cancellation Flow
+
+Cancellation logic is buy-order focused. Core rules currently include:
+
+- `cancelDepthLevel`: cancel when a buy order is within the configured bid depth.
+- `minBookNotionalUsd`: cancel when bid notional above the order price is below the threshold.
+- `volumeDropPercent` and `volumeDropWindowSec`: cancel on sharp reduction of protected/front bid notional in a window.
+- `buyPressureUsd` and `buyPressureWindowSec`: cancel when recent BUY trades imply enough buy pressure.
+- `cancelFollowDropPercent`, `cancelFollowWindowSec`, and `cancelFollowDepthLevels`: cancel when top bid levels show enough follow-on withdrawal.
+- `orderResetEnabled`, `orderResetMinMinutes`, and `orderResetMaxMinutes`: optionally cancel and re-place orders after a random reset window.
+
+Important behavior:
+
+- New orders have a cooldown before most cancellation rules can remove them.
+- High-priority low-book-notional checks can bypass cooldown.
+- Depth and minimum-notional risk cancellations are confirmed with a fresh CLOB REST order book before the order is cancelled.
+- The order book is price-level aggregate data; it is not a precise per-wallet queue.
+- `Decimal` should be used for price, size, and notional calculations.
+
+## API Surface
+
+Current API route files:
+
+- `GET/POST /api/accounts`
+- `GET/PUT/DELETE /api/accounts/[name]`
+- `POST /api/accounts/[name]/start`
+- `POST /api/accounts/[name]/stop`
+- `POST /api/accounts/[name]/cancel-order`
+- `POST /api/accounts/[name]/cancel-all`
+- `POST /api/batch/start-all`
+- `POST /api/batch/stop-all`
+- `GET/PUT /api/config`
+- `GET /api/markets`
+- `GET /api/markets/orderbooks`
+
+The browser WebSocket endpoint is `/ws`. Client messages currently only use `"PING"` and receive `"PONG"`; server-to-client application messages are JSON `WsMessage` payloads.
+
+## Change Guidelines
+
+- Preserve the custom server singleton model. Next.js API routes and the custom server must share `engineManager` and `store` through `globalThis`.
+- Keep server-only code out of client components and browser hooks.
+- Keep private keys server-side. Browser DTOs must not include `privateKey`.
+- Use structured route handlers and typed DTOs rather than ad hoc JSON shapes when adding API behavior.
+- For CLOB and strategy math, avoid JavaScript floating-point comparisons where precision matters; use `Decimal`.
+- When changing strategy config, update `StrategyConfig`, defaults in `src/lib/config.ts`, database load/save behavior if needed, API validation in `src/app/api/config/route.ts`, client DTOs, UI settings, and this file.
+- When adding a WebSocket message type, update both server-side and client-side `WsMessage` types plus `src/stores/appStore.ts`.
+- When adding persistent fields, include SQLite migration logic in `src/lib/db/database.ts`.
+- Respect the existing dirty worktree. Do not revert unrelated user changes.
+
+## Verification Checklist
+
+Before handing off code changes, run the most relevant commands:
+
+- `npm run lint` for TypeScript/ESLint issues.
+- `npm run build` for production build and Next.js integration issues.
+- For desktop packaging changes, run the relevant `desktop:*` script.
+
+If verification cannot be run because of missing network, credentials, platform requirements, or long-running packaging constraints, state that clearly in the final response.
+
+## Sync Log
+
+- 2026-05-21: Created this `AGENT.md` from the current README, package scripts, and source structure. No business code was changed in this update.

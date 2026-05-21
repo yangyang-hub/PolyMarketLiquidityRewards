@@ -105,6 +105,7 @@ npm run start
 
 | 变量名 | 默认值 | 说明 |
 | --- | --- | --- |
+| `HOST` | `127.0.0.1` | 服务监听地址；如需局域网访问再手动改为 `0.0.0.0` |
 | `PORT` | `3000` | 服务监听端口 |
 | `CHAIN_ID` | `137` | Polygon 主网链 ID |
 | `CLOB_HOST` | `https://clob.polymarket.com` | CLOB REST Host |

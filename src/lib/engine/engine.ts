@@ -7,7 +7,11 @@ import type {
   OrderEvent,
   OrderBook,
 } from "../types";
-import { ClobExecutor } from "../clob/executor";
+import {
+  adjustSizeForCostPrecision,
+  ClobExecutor,
+  minCostAdjustedSize,
+} from "../clob/executor";
 import type { TradeUpdate } from "../clob/ws-feed";
 import {
   protectedBidNotional,
@@ -43,6 +47,22 @@ interface ResetOrderResult {
   didReset: boolean;
   replacement?: ActiveOrder;
 }
+
+interface PendingResetPlacement {
+  sourceOrderId: string;
+  tokenId: string;
+  marketSlug: string;
+  side: ActiveOrder["side"];
+  priceStr: string;
+  size: Decimal;
+  nextTryAt: number;
+  attempts: number;
+}
+
+type PendingResetRiskCheck =
+  | { action: "ok" }
+  | { action: "retry"; reason: string }
+  | { action: "abort"; reason: string };
 
 type OrderValue = Decimal.Value;
 
@@ -81,6 +101,7 @@ export class AccountEngine {
   private bookHistory: Map<string, BookHistorySample[]> = new Map();
   private buyPressureHistory: Map<string, NotionalSample[]> = new Map();
   private resetDueAtByOrderId: Map<string, number> = new Map();
+  private pendingResetPlacements: Map<string, PendingResetPlacement> = new Map();
   private onEvent: (event: OrderEvent) => void;
   private onStateChange: (name: string, state: AccountState) => void;
   private onTokensDiscovered: (accountName: string, tokenIds: Set<string>) => Promise<void>;
@@ -113,7 +134,7 @@ export class AccountEngine {
       this.broadcastState();
 
       // Initial discovery: pull orders immediately to trigger subscriptions
-      await this.discover();
+      await this.tick();
 
       // Start periodic full tick (refresh order list + balance from API)
       this.periodicTimer = setInterval(async () => {
@@ -155,6 +176,8 @@ export class AccountEngine {
       clearInterval(this.periodicTimer);
       this.periodicTimer = null;
     }
+    this.pendingResetPlacements.clear();
+    this.resetDueAtByOrderId.clear();
 
     store.updateAccount(this.account.name, {
       status: "idle",
@@ -188,15 +211,6 @@ export class AccountEngine {
       this.recordBookUpdate(tokenId, book);
     }
     this.realtimeCancelCheck(tokenId);
-  }
-
-  /** Initial discovery: pull orders once to trigger subscriptions */
-  private async discover(): Promise<void> {
-    try {
-      await this.tick();
-    } catch (e: unknown) {
-      console.error(`[Engine:${this.account.name}] Discover error:`, this.errorMessage(e));
-    }
   }
 
   /**
@@ -340,6 +354,15 @@ export class AccountEngine {
       }
 
       trackedOrders.push(activeOrder);
+    }
+
+    for (const pending of this.pendingResetPlacements.values()) {
+      activeTokenIds.add(pending.tokenId);
+    }
+    const pendingReplacements = await this.processPendingResetPlacements();
+    for (const replacement of pendingReplacements) {
+      trackedOrders.push(replacement);
+      activeTokenIds.add(replacement.tokenId);
     }
 
     // 3. Update account state BEFORE notifying manager,
@@ -501,6 +524,7 @@ export class AccountEngine {
         return {
           code: "front_volume_drop",
           label: `${config.volumeDropWindowSec}s 前方买盘骤降 ${drop.toDecimalPlaces(1)}%`,
+          requiresRestConfirmation: true,
         };
       }
     }
@@ -525,6 +549,7 @@ export class AccountEngine {
         return {
           code: "cancel_follow",
           label: `${config.cancelFollowWindowSec}s 买盘撤量跟随 ${drop.toDecimalPlaces(1)}%`,
+          requiresRestConfirmation: true,
         };
       }
     }
@@ -632,6 +657,24 @@ export class AccountEngine {
       );
     }
 
+    if (trigger.code === "front_volume_drop") {
+      const drop = this.getProtectedBidDropPercent(
+        restBook,
+        orderPrice,
+        store.config.volumeDropWindowSec,
+      );
+      return drop != null && drop.greaterThanOrEqualTo(store.config.volumeDropPercent);
+    }
+
+    if (trigger.code === "cancel_follow") {
+      const drop = this.getTopBidDropPercent(
+        restBook,
+        store.config.cancelFollowDepthLevels,
+        store.config.cancelFollowWindowSec,
+      );
+      return drop != null && drop.greaterThanOrEqualTo(store.config.cancelFollowDropPercent);
+    }
+
     return true;
   }
 
@@ -690,6 +733,16 @@ export class AccountEngine {
       return { didReset: false };
     }
 
+    const price = new Decimal(activeOrder.priceStr);
+    const placementSize = this.getPostOnlyPlacementSize(price, remainingSize);
+    if (!placementSize) {
+      console.warn(
+        `[Engine:${this.account.name}] Skip reset for ${activeOrder.orderId}: remaining size is too small to repost`,
+      );
+      this.resetDueAtByOrderId.set(activeOrder.orderId, Date.now() + 60_000);
+      return { didReset: false };
+    }
+
     console.log(
       `[Engine:${this.account.name}] Resetting ${activeOrder.orderId} ` +
       `(timer, token=${activeOrder.tokenId.slice(0, 12)}...)`,
@@ -704,19 +757,25 @@ export class AccountEngine {
     this.resetDueAtByOrderId.delete(activeOrder.orderId);
     this.emitEvent("cancelled", rawOrder, slug, "定时重置");
 
-    const price = new Decimal(activeOrder.priceStr);
-    const newOrderId = activeOrder.side === "buy"
-      ? await this.executor.buyLimitPostOnly(activeOrder.tokenId, price, remainingSize)
-      : await this.executor.sellLimitPostOnly(activeOrder.tokenId, price, remainingSize);
+    let newOrderId: string | null = null;
+    try {
+      newOrderId = activeOrder.side === "buy"
+        ? await this.executor.buyLimitPostOnly(activeOrder.tokenId, price, placementSize)
+        : await this.executor.sellLimitPostOnly(activeOrder.tokenId, price, placementSize);
+    } catch (e: unknown) {
+      this.queuePendingResetPlacement(activeOrder, slug, placementSize, this.errorMessage(e));
+      return { didReset: true };
+    }
 
     if (!newOrderId) {
+      this.queuePendingResetPlacement(activeOrder, slug, placementSize, "CLOB 未返回新订单编号");
       return { didReset: true };
     }
 
     const replacement: ActiveOrder = {
       ...activeOrder,
       orderId: newOrderId,
-      size: remainingSize.toNumber(),
+      size: placementSize.toNumber(),
       scoring: false,
       timestamp: Date.now(),
     };
@@ -727,10 +786,153 @@ export class AccountEngine {
       asset_id: activeOrder.tokenId,
       side: activeOrder.side === "buy" ? "BUY" : "SELL",
       price: activeOrder.priceStr,
-      original_size: remainingSize.toString(),
+      original_size: placementSize.toString(),
     }, slug, "定时重置重挂");
 
     return { didReset: true, replacement };
+  }
+
+  private async processPendingResetPlacements(): Promise<ActiveOrder[]> {
+    const now = Date.now();
+    const replacements: ActiveOrder[] = [];
+
+    for (const [sourceOrderId, pending] of this.pendingResetPlacements) {
+      if (pending.nextTryAt > now) continue;
+
+      const price = new Decimal(pending.priceStr);
+      pending.attempts += 1;
+
+      try {
+        const riskCheck = await this.checkPendingResetPlacementRisk(pending, price);
+        if (riskCheck.action === "retry") {
+          this.reschedulePendingResetPlacement(pending, riskCheck.reason);
+          continue;
+        }
+        if (riskCheck.action === "abort") {
+          this.pendingResetPlacements.delete(sourceOrderId);
+          store.updateAccount(this.account.name, {
+            error: `定时重置补挂已取消：${riskCheck.reason}`,
+          });
+          this.broadcastState();
+          console.warn(
+            `[Engine:${this.account.name}] Aborted pending reset placement ` +
+            `${sourceOrderId}: ${riskCheck.reason}`,
+          );
+          continue;
+        }
+
+        const newOrderId = pending.side === "buy"
+          ? await this.executor.buyLimitPostOnly(pending.tokenId, price, pending.size)
+          : await this.executor.sellLimitPostOnly(pending.tokenId, price, pending.size);
+
+        if (!newOrderId) {
+          this.reschedulePendingResetPlacement(pending, "CLOB 未返回新订单编号");
+          continue;
+        }
+
+        this.pendingResetPlacements.delete(sourceOrderId);
+        store.updateAccount(this.account.name, { error: undefined });
+
+        const replacement: ActiveOrder = {
+          orderId: newOrderId,
+          tokenId: pending.tokenId,
+          marketSlug: pending.marketSlug,
+          side: pending.side,
+          price: parseFloat(pending.priceStr),
+          priceStr: pending.priceStr,
+          size: pending.size.toNumber(),
+          status: "open",
+          scoring: false,
+          timestamp: Date.now(),
+        };
+        this.getResetDueAt(replacement);
+
+        this.emitEvent("placed", {
+          id: newOrderId,
+          asset_id: pending.tokenId,
+          side: pending.side === "buy" ? "BUY" : "SELL",
+          price: pending.priceStr,
+          original_size: pending.size.toString(),
+        }, pending.marketSlug, "定时重置补挂");
+
+        replacements.push(replacement);
+      } catch (e: unknown) {
+        this.reschedulePendingResetPlacement(pending, this.errorMessage(e));
+      }
+    }
+
+    return replacements;
+  }
+
+  private async checkPendingResetPlacementRisk(
+    pending: PendingResetPlacement,
+    price: Decimal,
+  ): Promise<PendingResetRiskCheck> {
+    const isBuy = pending.side === "buy";
+    if (!isBuy) return { action: "ok" };
+
+    const rawBook = await this.executor.getOrderBook(pending.tokenId);
+    const restBook = this.normalizeRestBook(pending.tokenId, rawBook);
+    if (!restBook) {
+      return { action: "retry", reason: "盘口数据不可用，暂不补挂" };
+    }
+
+    this.recordBookUpdate(pending.tokenId, restBook);
+    const trigger = this.getRiskCancelTrigger(restBook, price, isBuy);
+    if (!trigger) return { action: "ok" };
+
+    return { action: "abort", reason: trigger.label };
+  }
+
+  private queuePendingResetPlacement(
+    order: ActiveOrder,
+    slug: string,
+    size: Decimal,
+    reason: string,
+  ): void {
+    const pending: PendingResetPlacement = {
+      sourceOrderId: order.orderId,
+      tokenId: order.tokenId,
+      marketSlug: slug,
+      side: order.side,
+      priceStr: order.priceStr,
+      size,
+      nextTryAt: Date.now() + 5_000,
+      attempts: 0,
+    };
+    this.pendingResetPlacements.set(order.orderId, pending);
+    store.updateAccount(this.account.name, {
+      error: `定时重置已撤单，但补挂失败，等待重试：${reason}`,
+    });
+    this.broadcastState();
+  }
+
+  private reschedulePendingResetPlacement(
+    pending: PendingResetPlacement,
+    reason: string,
+  ): void {
+    const delayMs = Math.min(60_000, 5_000 * Math.max(1, pending.attempts));
+    pending.nextTryAt = Date.now() + delayMs;
+    store.updateAccount(this.account.name, {
+      error: `定时重置补挂失败，${Math.round(delayMs / 1000)} 秒后重试：${reason}`,
+    });
+    this.broadcastState();
+  }
+
+  private getPostOnlyPlacementSize(price: Decimal, rawSize: Decimal): Decimal | null {
+    let size = rawSize.toDecimalPlaces(2, Decimal.ROUND_DOWN);
+    size = adjustSizeForCostPrecision(price, size);
+
+    if (size.isZero()) {
+      const bumped = minCostAdjustedSize(price);
+      const bumpedCost = price.times(bumped);
+      if (bumpedCost.greaterThan(rawSize.times(price).times(5))) {
+        return null;
+      }
+      size = bumped;
+    }
+
+    return price.times(size).greaterThanOrEqualTo(1) ? size : null;
   }
 
   private getResetDueAt(order: ActiveOrder): number | null {

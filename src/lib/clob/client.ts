@@ -1,8 +1,8 @@
 import { Chain, ClobClient, SignatureTypeV2 } from "@polymarket/clob-client-v2";
 import type { ApiKeyCreds } from "@polymarket/clob-client-v2";
-import { ethers } from "ethers";
 import type { AccountConfig } from "../types";
 import { getClobHost, getChainId } from "../config";
+import { createClobWalletClient } from "./wallet";
 
 function getChain(): Chain {
   const chainId = getChainId();
@@ -11,11 +11,12 @@ function getChain(): Chain {
 }
 
 export function createClobClient(account: AccountConfig, creds?: ApiKeyCreds): ClobClient {
-  const wallet = new ethers.Wallet(account.privateKey);
+  const chain = getChain();
+  const wallet = createClobWalletClient(account.privateKey, chain);
 
   return new ClobClient({
     host: getClobHost(),
-    chain: getChain(),
+    chain,
     signer: wallet,
     creds,
     signatureType: account.signatureType as SignatureTypeV2,

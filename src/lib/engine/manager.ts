@@ -23,9 +23,23 @@ import { ClobExecutor } from "../clob/executor";
 import { fetchMarketsByTokenIds } from "../gamma/api";
 import { store } from "../store/memory-store";
 import { AccountEngine } from "./engine";
-import { ethers } from "ethers";
+import { getWalletAddress } from "../clob/wallet";
 
 const ACCOUNT_NAME_RE = /^[a-zA-Z0-9_\-]{1,64}$/;
+
+function normalizeAccountName(name: string): string {
+  const normalized = name.trim();
+  if (!normalized) throw new Error("账户名称不能为空");
+  if (!ACCOUNT_NAME_RE.test(normalized)) {
+    throw new Error("账户名称仅支持字母、数字、下划线和连字符，长度 1-64 位");
+  }
+  return normalized;
+}
+
+function normalizeProxyWallet(proxyWallet?: string): string | undefined {
+  const normalized = proxyWallet?.trim();
+  return normalized || undefined;
+}
 
 class EngineManager {
   private engines: Map<string, AccountEngine> = new Map();
@@ -69,10 +83,9 @@ class EngineManager {
 
     // Initialize account states
     for (const acc of this.accountConfigs) {
-      const wallet = new ethers.Wallet(acc.privateKey);
       store.updateAccount(acc.name, {
         status: "idle",
-        address: wallet.address,
+        address: getWalletAddress(acc.privateKey),
       });
 
       // Create engine
@@ -135,6 +148,20 @@ class EngineManager {
     );
     this.engines.set(acc.name, engine);
     return engine;
+  }
+
+  private hasAccountName(normalizedName: string): boolean {
+    return this.accountConfigs.some((acc) => acc.name.trim() === normalizedName);
+  }
+
+  private resolveAccountName(name: string): string {
+    const normalizedName = name.trim();
+    if (this.engines.has(normalizedName)) return normalizedName;
+    if (this.engines.has(name)) return name;
+    for (const existingName of this.engines.keys()) {
+      if (existingName.trim() === normalizedName) return existingName;
+    }
+    return normalizedName;
   }
 
   // --- Token Discovery & Subscription Sync ---
@@ -278,41 +305,48 @@ class EngineManager {
     signatureType: number,
     proxyWallet?: string,
   ): Promise<void> {
-    if (!name.trim()) throw new Error("账户名称不能为空");
-    if (!ACCOUNT_NAME_RE.test(name.trim())) {
-      throw new Error("账户名称仅支持字母、数字、下划线和连字符，长度 1-64 位");
-    }
-    if (this.engines.has(name)) throw new Error(`账户已存在：${name}`);
+    const normalizedName = normalizeAccountName(name);
+    const normalizedProxyWallet = normalizeProxyWallet(proxyWallet);
+    if (this.hasAccountName(normalizedName)) throw new Error(`账户已存在：${normalizedName}`);
 
     // Validate private key
-    const wallet = new ethers.Wallet(privateKey);
+    const address = getWalletAddress(privateKey);
 
     // Write to DB
-    dbAddAccount(name, privateKey, signatureType, proxyWallet);
+    dbAddAccount(normalizedName, privateKey, signatureType, normalizedProxyWallet);
 
     // Update in-memory config
-    const acc: AccountConfig = { name, privateKey, signatureType, proxyWallet };
+    const acc: AccountConfig = {
+      name: normalizedName,
+      privateKey,
+      signatureType,
+      proxyWallet: normalizedProxyWallet,
+    };
     this.accountConfigs.push(acc);
 
     // Create engine
     this.createEngine(acc);
 
     // Update store
-    store.updateAccount(name, { status: "idle", address: wallet.address });
+    store.updateAccount(normalizedName, { status: "idle", address });
 
     // Fetch balance in background (don't block account creation)
     const executor = new ClobExecutor(acc);
     executor.initApiKeys().then(async () => {
       const balance = await executor.getCollateralBalance();
-      console.log(`[Manager] ${name} balance: $${balance}`);
-      store.updateAccount(name, { balance });
-      this.broadcast({ type: "account_state", name, state: store.accounts.get(name)! });
+      console.log(`[Manager] ${normalizedName} balance: $${balance}`);
+      store.updateAccount(normalizedName, { balance });
+      this.broadcast({
+        type: "account_state",
+        name: normalizedName,
+        state: store.accounts.get(normalizedName)!,
+      });
     }).catch((e: unknown) => {
-      console.error(`[Manager] Failed to fetch balance for ${name}:`, this.errorMessage(e));
+      console.error(`[Manager] Failed to fetch balance for ${normalizedName}:`, this.errorMessage(e));
     });
 
     // Broadcast
-    this.broadcast({ type: "account_state", name, state: store.accounts.get(name)! });
+    this.broadcast({ type: "account_state", name: normalizedName, state: store.accounts.get(normalizedName)! });
     this.broadcast({ type: "account_configs", configs: dbGetAllAccountMetas() });
     this.broadcastSystemStatus();
   }
@@ -323,43 +357,52 @@ class EngineManager {
     signatureType: number,
     proxyWallet?: string,
   ): Promise<void> {
-    const engine = this.engines.get(name);
-    if (!engine) throw new Error(`未找到账户：${name}`);
+    const normalizedName = normalizeAccountName(name);
+    const normalizedProxyWallet = normalizeProxyWallet(proxyWallet);
+    const existingName = this.resolveAccountName(name);
+    const engine = this.engines.get(existingName);
+    if (!engine) throw new Error(`未找到账户：${normalizedName}`);
 
-    dbUpdateAccount(name, privateKey, signatureType, proxyWallet);
+    const currentConfig = dbGetAccountConfig(existingName);
+    if (!currentConfig) throw new Error(`未找到账户：${normalizedName}`);
 
-    const newConfig = dbGetAccountConfig(name);
-    if (!newConfig) throw new Error(`账户更新后无法从数据库读取：${name}`);
+    const nextPrivateKey = privateKey ?? currentConfig.privateKey;
+    const address = getWalletAddress(nextPrivateKey);
+
+    dbUpdateAccount(existingName, privateKey, signatureType, normalizedProxyWallet);
+
+    const newConfig = dbGetAccountConfig(existingName);
+    if (!newConfig) throw new Error(`账户更新后无法从数据库读取：${normalizedName}`);
 
     if (engine.isRunning()) {
       await engine.stop();
     }
 
-    const idx = this.accountConfigs.findIndex((a) => a.name === name);
+    const idx = this.accountConfigs.findIndex((a) => a.name === existingName);
     if (idx >= 0) this.accountConfigs[idx] = newConfig;
 
     this.createEngine(newConfig);
 
-    const wallet = new ethers.Wallet(newConfig.privateKey);
-    store.updateAccount(name, { status: "idle", address: wallet.address });
+    store.updateAccount(existingName, { status: "idle", address });
 
-    this.broadcast({ type: "account_state", name, state: store.accounts.get(name)! });
+    this.broadcast({ type: "account_state", name: existingName, state: store.accounts.get(existingName)! });
     this.broadcast({ type: "account_configs", configs: dbGetAllAccountMetas() });
   }
 
   async removeAccount(name: string): Promise<void> {
-    const engine = this.engines.get(name);
-    if (!engine) throw new Error(`未找到账户：${name}`);
+    const normalizedName = this.resolveAccountName(name);
+    const engine = this.engines.get(normalizedName);
+    if (!engine) throw new Error(`未找到账户：${normalizedName}`);
 
-    dbDeleteAccount(name);
+    dbDeleteAccount(normalizedName);
 
     if (engine.isRunning()) {
       await engine.stop();
     }
 
-    this.engines.delete(name);
-    this.accountConfigs = this.accountConfigs.filter((a) => a.name !== name);
-    store.accounts.delete(name);
+    this.engines.delete(normalizedName);
+    this.accountConfigs = this.accountConfigs.filter((a) => a.name !== normalizedName);
+    store.accounts.delete(normalizedName);
 
     this.broadcast({ type: "account_configs", configs: dbGetAllAccountMetas() });
     this.broadcastSystemStatus();
@@ -368,24 +411,26 @@ class EngineManager {
   // --- Engine Control ---
 
   async startAccount(name: string): Promise<boolean> {
-    const engine = this.engines.get(name);
+    const normalizedName = this.resolveAccountName(name);
+    const engine = this.engines.get(normalizedName);
     if (!engine) return false;
     const started = await engine.start();
     if (!started) {
-      dbSetAccountEnabled(name, false);
+      dbSetAccountEnabled(normalizedName, false);
       this.broadcastSystemStatus();
       return false;
     }
-    dbSetAccountEnabled(name, true);
+    dbSetAccountEnabled(normalizedName, true);
     this.broadcastSystemStatus();
     return true;
   }
 
   async stopAccount(name: string): Promise<boolean> {
-    const engine = this.engines.get(name);
+    const normalizedName = this.resolveAccountName(name);
+    const engine = this.engines.get(normalizedName);
     if (!engine) return false;
     await engine.stop();
-    dbSetAccountEnabled(name, false);
+    dbSetAccountEnabled(normalizedName, false);
     this.broadcastSystemStatus();
     return true;
   }
@@ -403,29 +448,35 @@ class EngineManager {
   }
 
   async cancelOrder(accountName: string, orderId: string): Promise<boolean> {
-    const engine = this.engines.get(accountName);
+    const normalizedName = this.resolveAccountName(accountName);
+    const engine = this.engines.get(normalizedName);
     if (!engine) return false;
     const ok = await engine.cancelOrderById(orderId);
     if (ok) {
       // Update account state: remove cancelled order from active list
-      const state = store.accounts.get(accountName);
+      const state = store.accounts.get(normalizedName);
       if (state) {
-        store.updateAccount(accountName, {
+        store.updateAccount(normalizedName, {
           activeOrders: state.activeOrders.filter((o) => o.orderId !== orderId),
         });
-        this.broadcast({ type: "account_state", name: accountName, state: store.accounts.get(accountName)! });
+        this.broadcast({
+          type: "account_state",
+          name: normalizedName,
+          state: store.accounts.get(normalizedName)!,
+        });
       }
     }
     return ok;
   }
 
   async cancelAllOrders(accountName: string): Promise<boolean> {
-    const engine = this.engines.get(accountName);
+    const normalizedName = this.resolveAccountName(accountName);
+    const engine = this.engines.get(normalizedName);
     if (!engine) return false;
     const ok = await engine.cancelAllOrders();
     if (!ok) return false;
-    store.updateAccount(accountName, { activeOrders: [] });
-    this.broadcast({ type: "account_state", name: accountName, state: store.accounts.get(accountName)! });
+    store.updateAccount(normalizedName, { activeOrders: [] });
+    this.broadcast({ type: "account_state", name: normalizedName, state: store.accounts.get(normalizedName)! });
     return true;
   }
 

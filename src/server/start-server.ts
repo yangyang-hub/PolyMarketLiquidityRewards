@@ -1,5 +1,4 @@
 import { createServer, type Server } from "http";
-import { parse } from "url";
 import next from "next";
 import { WebSocketServer } from "ws";
 import { engineManager } from "../lib/engine/manager";
@@ -20,7 +19,7 @@ export interface StartedServer {
 
 export async function startServer(options: StartServerOptions = {}): Promise<StartedServer> {
   const dev = options.dev ?? process.env.NODE_ENV !== "production";
-  const host = options.host ?? process.env.HOST ?? "0.0.0.0";
+  const host = options.host ?? process.env.HOST ?? "127.0.0.1";
   const port = options.port ?? parseInt(process.env.PORT || "3000", 10);
 
   const app = next({ dev, hostname: host, port });
@@ -29,14 +28,13 @@ export async function startServer(options: StartServerOptions = {}): Promise<Sta
   await app.prepare();
 
   const server = createServer((req, res) => {
-    const parsedUrl = parse(req.url!, true);
-    handle(req, res, parsedUrl);
+    handle(req, res);
   });
 
   const wss = new WebSocketServer({ noServer: true });
 
   server.on("upgrade", (req, socket, head) => {
-    const { pathname } = parse(req.url!);
+    const { pathname } = new URL(req.url ?? "/", "http://localhost");
     if (pathname === "/ws") {
       wss.handleUpgrade(req, socket, head, (ws) => {
         engineManager.addClient(ws);

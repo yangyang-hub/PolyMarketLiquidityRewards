@@ -131,7 +131,7 @@ export class ClobExecutor {
       return resp?.orderID || resp?.id || null;
     } catch (e: unknown) {
       console.error(`[${this.accountName}] BUY failed:`, errorMessage(e));
-      return null;
+      throw e;
     }
   }
 
@@ -167,7 +167,7 @@ export class ClobExecutor {
       return resp?.orderID || resp?.id || null;
     } catch (e: unknown) {
       console.error(`[${this.accountName}] SELL failed:`, errorMessage(e));
-      return null;
+      throw e;
     }
   }
 
@@ -197,7 +197,7 @@ export class ClobExecutor {
       return (await this.client.getOpenOrders(params)) || [];
     } catch (e: unknown) {
       console.error(`[${this.accountName}] getOpenOrders failed:`, errorMessage(e));
-      return [];
+      throw e;
     }
   }
 
@@ -238,7 +238,7 @@ export class ClobExecutor {
       return balance;
     } catch (e: unknown) {
       console.error(`[${this.accountName}] getBalance failed:`, errorMessage(e));
-      return 0;
+      throw e;
     }
   }
 

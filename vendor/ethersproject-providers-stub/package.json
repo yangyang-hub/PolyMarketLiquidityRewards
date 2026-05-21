@@ -1,0 +1,6 @@
+{
+  "name": "@ethersproject/providers",
+  "version": "5.8.0",
+  "main": "index.js",
+  "types": "index.d.ts"
+}

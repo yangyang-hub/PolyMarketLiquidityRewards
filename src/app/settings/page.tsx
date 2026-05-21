@@ -69,11 +69,13 @@ function SettingsEditor({ config }: { config: StrategyConfig }) {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await put("/api/config", local);
+      const result = await put<{ config: StrategyConfig }>("/api/config", local);
+      setLocal({ ...result.config });
     } catch (e: unknown) {
       console.error("Save failed:", e instanceof Error ? e.message : e);
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   const handleReset = () => {
