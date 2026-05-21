@@ -12,7 +12,14 @@ import { get as httpsGet } from "https";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 import { build } from "esbuild";
-import { assertPackagingEnvironment, extractTarGzEntry, packageBin, runNodeCli } from "./script-utils.mjs";
+import {
+  assertPackagingEnvironment,
+  betterSqliteBuildReleasePath,
+  extractTarGzEntry,
+  hasBetterSqliteNative,
+  packageBin,
+  runNodeCli,
+} from "./script-utils.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -75,7 +82,7 @@ function download(url, dest) {
   });
 }
 
-async function cachedDownload(url, cacheName, dest) {
+async function ensureCachedDownload(url, cacheName) {
   mkdirSync(CACHE, { recursive: true });
   const cached = resolve(CACHE, cacheName);
   if (!existsSync(cached)) {
@@ -84,8 +91,39 @@ async function cachedDownload(url, cacheName, dest) {
   } else {
     console.log(`  使用缓存 ${cacheName}`);
   }
+  return cached;
+}
+
+async function cachedDownload(url, cacheName, dest) {
+  const cached = await ensureCachedDownload(url, cacheName);
   cpSync(cached, dest);
 }
+
+async function ensureBuildTimeBetterSqliteNative() {
+  if (process.platform !== "win32" || process.arch !== "x64" || hasBetterSqliteNative(ROOT)) {
+    return;
+  }
+
+  const packageJsonPath = packageBin(ROOT, "better-sqlite3", "package.json");
+  if (!existsSync(packageJsonPath)) {
+    throw new Error("未找到 better-sqlite3。请先运行 npm install。");
+  }
+
+  if (skipDownloads) {
+    throw new Error(
+      "缺少构建期 better-sqlite3 原生模块。请不要使用 --skip-downloads，或先运行 npm run package 完成预编译模块准备。",
+    );
+  }
+
+  console.log("\n========== 0. 准备构建期 better-sqlite3 ==========");
+  const cacheName = `better-sqlite3-${BETTER_SQLITE3_VERSION}-node-${NODE_ABI}-win32-x64.tar.gz`;
+  const cachedTar = await ensureCachedDownload(BETTER_SQLITE3_URL, cacheName);
+  const nativeDest = betterSqliteBuildReleasePath(ROOT);
+  const nativeEntry = extractTarGzEntry(cachedTar, "build/Release/better_sqlite3.node", nativeDest);
+  console.log(`  已安装 ${nativeEntry} -> ${nativeDest}`);
+}
+
+await ensureBuildTimeBetterSqliteNative();
 
 console.log("\n========== 1. 构建 Next.js ==========");
 if (!skipNextBuild) {

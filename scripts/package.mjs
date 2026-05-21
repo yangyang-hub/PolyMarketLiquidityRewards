@@ -25,11 +25,19 @@ import {
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { get as httpsGet } from "https";
-import { assertPackagingEnvironment, extractTarGzEntry, packageBin, runNodeCli } from "./script-utils.mjs";
+import {
+  assertPackagingEnvironment,
+  betterSqliteBuildReleasePath,
+  extractTarGzEntry,
+  hasBetterSqliteNative,
+  packageBin,
+  runNodeCli,
+} from "./script-utils.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 const DIST = resolve(ROOT, "dist");
+const CACHE = resolve(ROOT, ".cache", "electron");
 
 assertPackagingEnvironment(ROOT);
 
@@ -85,9 +93,40 @@ function download(url, dest) {
   });
 }
 
+async function ensureCachedDownload(url, cacheName) {
+  mkdirSync(CACHE, { recursive: true });
+  const cached = resolve(CACHE, cacheName);
+  if (!existsSync(cached)) {
+    console.log(`  Downloading ${cacheName}`);
+    await download(url, cached);
+  } else {
+    console.log(`  Using cached ${cacheName}`);
+  }
+  return cached;
+}
+
+async function ensureBuildTimeBetterSqliteNative() {
+  if (process.platform !== "win32" || process.arch !== "x64" || hasBetterSqliteNative(ROOT)) {
+    return;
+  }
+
+  if (!existsSync(packageBin(ROOT, "better-sqlite3", "package.json"))) {
+    throw new Error("better-sqlite3 is missing. Run npm install first.");
+  }
+
+  console.log("\n========== Step 0: Build-time better-sqlite3 ==========");
+  const cacheName = `better-sqlite3-${BETTER_SQLITE3_VERSION}-node-${NODE_ABI}-win32-x64.tar.gz`;
+  const cachedTar = await ensureCachedDownload(BETTER_SQLITE3_URL, cacheName);
+  const nativeDest = betterSqliteBuildReleasePath(ROOT);
+  const nativeEntry = extractTarGzEntry(cachedTar, "build/Release/better_sqlite3.node", nativeDest);
+  console.log(`  Installed ${nativeEntry} -> ${nativeDest}`);
+}
+
 // ---------------------------------------------------------------------------
 // Step 1: Next.js build
 // ---------------------------------------------------------------------------
+
+await ensureBuildTimeBetterSqliteNative();
 
 console.log("\n========== Step 1: Next.js build ==========");
 runNodeCli(ROOT, "next", packageBin(ROOT, "next", "dist", "bin", "next"), ["build"]);

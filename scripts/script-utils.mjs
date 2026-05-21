@@ -44,6 +44,28 @@ export function assertPackagingEnvironment(root) {
   }
 }
 
+export function betterSqliteBuildReleasePath(root) {
+  return packageBin(root, "better-sqlite3", "build", "Release", "better_sqlite3.node");
+}
+
+export function hasBetterSqliteNative(root) {
+  return [
+    packageBin(root, "better-sqlite3", "build", "better_sqlite3.node"),
+    packageBin(root, "better-sqlite3", "build", "Debug", "better_sqlite3.node"),
+    betterSqliteBuildReleasePath(root),
+    packageBin(root, "better-sqlite3", "out", "Debug", "better_sqlite3.node"),
+    packageBin(root, "better-sqlite3", "Debug", "better_sqlite3.node"),
+    packageBin(root, "better-sqlite3", "out", "Release", "better_sqlite3.node"),
+    packageBin(root, "better-sqlite3", "Release", "better_sqlite3.node"),
+    packageBin(root, "better-sqlite3", "build", "default", "better_sqlite3.node"),
+    packageBin(root, "better-sqlite3", "compiled", process.versions.node, process.platform, process.arch, "better_sqlite3.node"),
+    packageBin(root, "better-sqlite3", "addon-build", "release", "install-root", "better_sqlite3.node"),
+    packageBin(root, "better-sqlite3", "addon-build", "debug", "install-root", "better_sqlite3.node"),
+    packageBin(root, "better-sqlite3", "addon-build", "default", "install-root", "better_sqlite3.node"),
+    packageBin(root, "better-sqlite3", "lib", "binding", `node-v${process.versions.modules}-${process.platform}-${process.arch}`, "better_sqlite3.node"),
+  ].some((file) => existsSync(file));
+}
+
 export function extractTarGzEntry(archivePath, entrySuffix, destPath) {
   const archive = gunzipSync(readFileSync(archivePath));
   const wanted = normalizeTarPath(entrySuffix);
