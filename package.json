@@ -44,6 +44,7 @@
       }
     ],
     "asar": true,
+    "npmRebuild": false,
     "win": {
       "target": [
         {

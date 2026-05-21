@@ -170,6 +170,7 @@ Before handing off code changes, run the most relevant commands:
 - On Windows, run packaging from a local drive path, not a UNC path such as `\\tsclient\...`; `cmd.exe` falls back to `C:\Windows` for UNC working directories.
 - Windows packaging requires Node.js 26.x and platform-specific optional native packages such as `lightningcss-win32-x64-msvc`; after switching Node versions, reinstall dependencies with `npm install --include=optional`.
 - Windows packaging extracts the downloaded `better-sqlite3` tarball through Node.js code in `scripts/script-utils.mjs`, not the system `tar` command.
+- Electron Builder has `npmRebuild` disabled because packaged `better-sqlite3` runs in the bundled Node 26 backend from `dist-server`, not in Electron's main process.
 
 If verification cannot be run because of missing network, credentials, platform requirements, or long-running packaging constraints, state that clearly in the final response.
 
@@ -178,5 +179,6 @@ If verification cannot be run because of missing network, credentials, platform 
 - 2026-05-21: Updated packaging scripts to avoid nested `npm run` and `npx` so Windows builds resolve local CLIs reliably. Documented the UNC-path packaging limitation in `README.md` and ignored generated Electron packaging directories.
 - 2026-05-21: Added a Windows packaging preflight for missing native CSS optional dependencies and documented the `lightningcss-win32-x64-msvc` recovery path.
 - 2026-05-21: Replaced system `tar` extraction for the Windows `better-sqlite3` prebuild with a Node.js tar.gz entry extractor to avoid `C:\...` path handling failures.
+- 2026-05-21: Disabled Electron Builder `npmRebuild` so packaging does not invoke node-gyp/Python for root `better-sqlite3`.
 - 2026-05-21: Migrated the project baseline from Node 20 to Node 26 only, including package engines, Docker image, esbuild targets, Windows bundled `node.exe`, and `better-sqlite3` Node ABI.
 - 2026-05-21: Created this `AGENT.md` from the current README, package scripts, and source structure. No business code was changed in this update.
