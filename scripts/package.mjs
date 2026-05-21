@@ -13,7 +13,6 @@
  *   5. Generate 启动.bat, 停止说明.txt, .env
  */
 
-import { execFileSync } from "child_process";
 import {
   cpSync,
   existsSync,
@@ -26,7 +25,7 @@ import {
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { get as httpsGet } from "https";
-import { assertPackagingEnvironment, packageBin, runNodeCli } from "./script-utils.mjs";
+import { assertPackagingEnvironment, extractTarGzEntry, packageBin, runNodeCli } from "./script-utils.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -84,13 +83,6 @@ function download(url, dest) {
     };
     request(url);
   });
-}
-
-/** Extract a .tar.gz to a directory using native tar module. */
-async function extractTarGz(tarPath, destDir) {
-  // Use tar CLI which is available on all platforms
-  mkdirSync(destDir, { recursive: true });
-  execFileSync("tar", ["xzf", tarPath, "-C", destDir]);
 }
 
 // ---------------------------------------------------------------------------
@@ -203,13 +195,6 @@ await download(BETTER_SQLITE3_URL, tarDest);
 
 // Extract the .node file from the tarball
 // The tarball contains: build/Release/better_sqlite3.node
-const extractDir = resolve(DIST, "_bs3_tmp");
-await extractTarGz(tarDest, extractDir);
-
-// Find and place the .node file into the correct location
-// bindings looks for it in node_modules/better-sqlite3/build/Release/
-const nativeModuleSrc = resolve(extractDir, "build/Release/better_sqlite3.node");
-
 function findBetterSqlite3Dir(base) {
   const direct = resolve(base, "node_modules/better-sqlite3/build/Release");
   if (existsSync(resolve(base, "node_modules/better-sqlite3"))) {
@@ -219,20 +204,17 @@ function findBetterSqlite3Dir(base) {
 }
 
 const targetReleaseDir = findBetterSqlite3Dir(DIST);
-if (targetReleaseDir) {
-  mkdirSync(targetReleaseDir, { recursive: true });
-  cpSync(nativeModuleSrc, resolve(targetReleaseDir, "better_sqlite3.node"));
-  console.log(`  Placed better_sqlite3.node → ${targetReleaseDir}`);
-} else {
+const finalReleaseDir = targetReleaseDir || resolve(DIST, "node_modules/better-sqlite3/build/Release");
+if (!targetReleaseDir) {
   console.warn("  WARNING: Could not find better-sqlite3 in node_modules, placing at default path");
-  const fallback = resolve(DIST, "node_modules/better-sqlite3/build/Release");
-  mkdirSync(fallback, { recursive: true });
-  cpSync(nativeModuleSrc, resolve(fallback, "better_sqlite3.node"));
 }
+mkdirSync(finalReleaseDir, { recursive: true });
+const nativeModuleDest = resolve(finalReleaseDir, "better_sqlite3.node");
+const nativeEntry = extractTarGzEntry(tarDest, "build/Release/better_sqlite3.node", nativeModuleDest);
+console.log(`  Placed ${nativeEntry} → ${nativeModuleDest}`);
 
 // Cleanup temp files
 rmSync(tarDest);
-rmSync(extractDir, { recursive: true });
 
 // ---------------------------------------------------------------------------
 // Step 5: Generate startup files

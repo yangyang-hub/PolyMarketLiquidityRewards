@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "child_process";
 import {
   cpSync,
   createWriteStream,
@@ -13,7 +12,7 @@ import { get as httpsGet } from "https";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 import { build } from "esbuild";
-import { assertPackagingEnvironment, packageBin, runNodeCli } from "./script-utils.mjs";
+import { assertPackagingEnvironment, extractTarGzEntry, packageBin, runNodeCli } from "./script-utils.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -156,17 +155,13 @@ if (skipDownloads) {
   const tarDest = resolve(DIST, "better-sqlite3-win32-x64.tar.gz");
   await cachedDownload(BETTER_SQLITE3_URL, `better-sqlite3-${BETTER_SQLITE3_VERSION}-node-${NODE_ABI}-win32-x64.tar.gz`, tarDest);
 
-  const extractDir = resolve(DIST, "_better_sqlite3");
-  mkdirSync(extractDir, { recursive: true });
-  execFileSync("tar", ["xzf", tarDest, "-C", extractDir], { stdio: "inherit" });
-
-  const nativeSrc = resolve(extractDir, "build", "Release", "better_sqlite3.node");
   const nativeDestDir = resolve(DIST, "node_modules", "better-sqlite3", "build", "Release");
   mkdirSync(nativeDestDir, { recursive: true });
-  cpSync(nativeSrc, resolve(nativeDestDir, "better_sqlite3.node"));
+  const nativeDest = resolve(nativeDestDir, "better_sqlite3.node");
+  const nativeEntry = extractTarGzEntry(tarDest, "build/Release/better_sqlite3.node", nativeDest);
+  console.log(`  已解压 ${nativeEntry}`);
 
   rmSync(tarDest, { force: true });
-  rmSync(extractDir, { recursive: true, force: true });
 }
 
 console.log("\n后端资源准备完成：dist-server/");

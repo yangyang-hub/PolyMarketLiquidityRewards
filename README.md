@@ -232,6 +232,7 @@ Windows 打包注意：
 - 请在本地盘符路径下运行，例如 `C:\workspace\node\PolyMarketLiquidityRewards`。
 - 不要从 `\\tsclient\...` 这类 UNC 共享路径直接运行 `npm run package`；Windows `cmd.exe` 不支持把 UNC 路径作为当前目录，会退回到 `C:\Windows` 并导致找不到 `package.json`。
 - 打包脚本会直接调用 `node_modules` 里的本地 CLI，不依赖全局 `npx`。
+- 打包脚本使用 Node.js 直接解压 `better-sqlite3` 预编译包，不依赖系统 `tar`，避免 `C:\...` 路径被当成远程归档地址。
 - 当前项目只支持 Node.js 26.x；常用 npm scripts 会在启动前检查 Node 主版本。切换 Node 版本后请重新运行 `npm install --include=optional`。
 - 如果出现 `Cannot find module '../lightningcss.win32-x64-msvc.node'`，说明 Windows 原生 optional dependency 没装完整。请在 Windows 本地路径下删除 `node_modules` 后运行 `npm install --include=optional`，再重新打包。
 
