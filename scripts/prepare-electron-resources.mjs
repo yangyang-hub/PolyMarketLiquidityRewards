@@ -13,7 +13,7 @@ import { get as httpsGet } from "https";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 import { build } from "esbuild";
-import { packageBin, runNodeCli } from "./script-utils.mjs";
+import { assertPackagingEnvironment, packageBin, runNodeCli } from "./script-utils.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -34,6 +34,8 @@ const NODE_ABI = "v115";
 const BETTER_SQLITE3_URL =
   `https://github.com/WiseLibs/better-sqlite3/releases/download/${BETTER_SQLITE3_VERSION}/` +
   `better-sqlite3-${BETTER_SQLITE3_VERSION}-node-${NODE_ABI}-win32-x64.tar.gz`;
+
+assertPackagingEnvironment(ROOT);
 
 function download(url, dest) {
   return new Promise((resolveDone, reject) => {

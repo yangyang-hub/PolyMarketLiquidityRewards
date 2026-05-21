@@ -18,7 +18,7 @@ The current product boundary is "monitoring plus cancellation risk control". The
 
 ## Stack
 
-- Runtime: Node.js 20+.
+- Runtime: Node.js 20 LTS.
 - App framework: Next.js 16 App Router, React 19, TypeScript.
 - UI state: Zustand.
 - Styling: Tailwind CSS 4 and DaisyUI.
@@ -168,10 +168,12 @@ Before handing off code changes, run the most relevant commands:
 - `npm run build` for production build and Next.js integration issues.
 - For desktop packaging changes, run the relevant `desktop:*` script.
 - On Windows, run packaging from a local drive path, not a UNC path such as `\\tsclient\...`; `cmd.exe` falls back to `C:\Windows` for UNC working directories.
+- Windows packaging requires platform-specific optional native packages such as `lightningcss-win32-x64-msvc`; if they are missing, reinstall dependencies on Windows with `npm install --include=optional`.
 
 If verification cannot be run because of missing network, credentials, platform requirements, or long-running packaging constraints, state that clearly in the final response.
 
 ## Sync Log
 
 - 2026-05-21: Updated packaging scripts to avoid nested `npm run` and `npx` so Windows builds resolve local CLIs reliably. Documented the UNC-path packaging limitation in `README.md` and ignored generated Electron packaging directories.
+- 2026-05-21: Added a Windows packaging preflight for missing native CSS optional dependencies and documented the `lightningcss-win32-x64-msvc` recovery path.
 - 2026-05-21: Created this `AGENT.md` from the current README, package scripts, and source structure. No business code was changed in this update.

@@ -71,7 +71,7 @@
 
 ## 环境要求
 
-- Node.js 20+
+- Node.js 20 LTS
 - npm 10+（或兼容版本）
 - 能访问：
   - `https://clob.polymarket.com`
@@ -232,6 +232,7 @@ Windows 打包注意：
 - 请在本地盘符路径下运行，例如 `C:\workspace\node\PolyMarketLiquidityRewards`。
 - 不要从 `\\tsclient\...` 这类 UNC 共享路径直接运行 `npm run package`；Windows `cmd.exe` 不支持把 UNC 路径作为当前目录，会退回到 `C:\Windows` 并导致找不到 `package.json`。
 - 打包脚本会直接调用 `node_modules` 里的本地 CLI，不依赖全局 `npx`。
+- 如果出现 `Cannot find module '../lightningcss.win32-x64-msvc.node'`，说明 Windows 原生 optional dependency 没装完整。请在 Windows 本地路径下删除 `node_modules` 后运行 `npm install --include=optional`，再重新打包。
 
 常用桌面端命令：
 

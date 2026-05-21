@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "main": "dist-electron/main.js",
+  "engines": {
+    "node": "20.x",
+    "npm": ">=10"
+  },
   "scripts": {
     "dev": "tsx server.ts",
     "build": "next build",
