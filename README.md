@@ -235,6 +235,7 @@ Windows 打包注意：
 - 打包脚本使用 Node.js 直接解压 `better-sqlite3` 预编译包，不依赖系统 `tar`，避免 `C:\...` 路径被当成远程归档地址。
 - 如果 `npm install` 没有生成根目录 `node_modules/better-sqlite3` 的 `.node` 文件，打包脚本会在 `next build` 前自动安装 Node 26 Windows 预编译模块，避免构建期加载数据库时报错。
 - Electron Builder 已关闭 `npmRebuild`；后端使用 `dist-server` 中的 Node 26 预编译 `better-sqlite3`，不需要本机 Python/node-gyp。
+- Electron Builder 已配置跳过 `.exe` 签名；本地未签名安装包不会下载 `winCodeSign.7z`，也不需要 Windows 符号链接权限。
 - 当前项目只支持 Node.js 26.x；常用 npm scripts 会在启动前检查 Node 主版本。切换 Node 版本后请重新运行 `npm install --include=optional`。
 - 如果出现 `Cannot find module '../lightningcss.win32-x64-msvc.node'`，说明 Windows 原生 optional dependency 没装完整。请在 Windows 本地路径下删除 `node_modules` 后运行 `npm install --include=optional`，再重新打包。
 

@@ -54,6 +54,9 @@
           ]
         }
       ],
+      "signExts": [
+        "!.exe"
+      ],
       "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "nsis": {
