@@ -26,17 +26,21 @@ import {
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import { get as httpsGet } from "https";
-import { packageBin, runNodeCli } from "./script-utils.mjs";
+import { assertPackagingEnvironment, packageBin, runNodeCli } from "./script-utils.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 const DIST = resolve(ROOT, "dist");
 
-const NODE_VERSION = "v20.18.0";
+assertPackagingEnvironment(ROOT);
+
+const NODE_VERSION = "v26.2.0";
 const NODE_EXE_URL = `https://nodejs.org/dist/${NODE_VERSION}/win-x64/node.exe`;
 
-const BETTER_SQLITE3_VERSION = "v12.6.2";
-const NODE_ABI = "v115"; // Node 20 ABI
+const packageJson = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf-8"));
+const betterSqliteVersion = (packageJson.dependencies["better-sqlite3"] || "12.10.0").replace(/^[^\d]*/, "");
+const BETTER_SQLITE3_VERSION = `v${betterSqliteVersion}`;
+const NODE_ABI = "v147"; // Node 26 ABI
 const BETTER_SQLITE3_URL =
   `https://github.com/WiseLibs/better-sqlite3/releases/download/${BETTER_SQLITE3_VERSION}/` +
   `better-sqlite3-${BETTER_SQLITE3_VERSION}-node-${NODE_ABI}-win32-x64.tar.gz`;
@@ -116,7 +120,7 @@ await build({
   entryPoints: [resolve(ROOT, "server.ts")],
   bundle: true,
   platform: "node",
-  target: "node20",
+  target: "node26",
   format: "cjs",
   outfile: resolve(ROOT, "dist-server.js"),
   banner: {

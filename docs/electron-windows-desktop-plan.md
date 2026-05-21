@@ -37,7 +37,7 @@ PolyMarket 风控桌面端.exe
 
 - Electron 打包后的 GUI 程序不会天然弹出命令行窗口。
 - 后端通过 `spawn(node.exe, ["server.js"], { windowsHide: true, shell: false })` 隐藏启动，不经过 `.bat`、`.cmd` 或 PowerShell。
-- `better-sqlite3` 继续运行在内置 Node 20 环境，避免 Electron 主进程原生模块 ABI 不匹配。
+- `better-sqlite3` 继续运行在内置 Node 26 环境，避免 Electron 主进程原生模块 ABI 不匹配；当前项目不再兼容低版本 Node。
 - 后端崩溃日志写入本地日志目录，用户不用面对控制台。
 
 ## 项目结构

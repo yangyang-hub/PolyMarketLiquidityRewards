@@ -5,10 +5,12 @@ import { get } from "http";
 import net from "net";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
-import { packageBin, runNode, spawnNodeCli } from "./script-utils.mjs";
+import { assertNode26, packageBin, runNode, spawnNodeCli } from "./script-utils.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
+
+assertNode26();
 
 function run(file, args, env = {}) {
   return spawn(file, args, {

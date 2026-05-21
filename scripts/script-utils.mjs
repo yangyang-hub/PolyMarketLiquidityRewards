@@ -27,14 +27,17 @@ export function spawnNodeCli(root, name, cliPath, args = [], env = {}) {
   });
 }
 
-export function assertPackagingEnvironment(root) {
+export function assertNode26() {
   const nodeMajor = Number.parseInt(process.versions.node.split(".")[0] || "0", 10);
-  if (nodeMajor !== 20) {
-    console.warn(
-      `[Package] 建议使用 Node.js 20 LTS 进行桌面端打包；当前为 ${process.version}。`,
+  if (nodeMajor !== 26) {
+    throw new Error(
+      `[Node] 当前项目只支持 Node.js 26.x。当前为 ${process.version}，请切换到 Node.js 26 后重新安装依赖。`,
     );
   }
+}
 
+export function assertPackagingEnvironment(root) {
+  assertNode26();
   if (process.platform === "win32" && process.arch === "x64") {
     assertWindowsX64NativeDeps(root);
   }
@@ -68,14 +71,16 @@ function assertWindowsX64NativeDeps(root) {
     ...missing.map((item) => `- ${item.name}: ${item.file}`),
     "",
     "这通常是因为 node_modules 来自 Linux/WSL/共享目录，或 npm install 时跳过了 optional dependencies。",
-    "请在 Windows 本地盘符路径的项目根目录重新安装依赖：",
+    "请先确认正在使用 Node.js 26.x，然后在 Windows 本地盘符路径的项目根目录重新安装依赖：",
     "",
     "CMD:",
+    "  node -v",
     "  rmdir /s /q node_modules",
     "  npm install --include=optional",
     "  npm run package",
     "",
     "PowerShell:",
+    "  node -v",
     "  Remove-Item -Recurse -Force node_modules",
     "  npm install --include=optional",
     "  npm run package",

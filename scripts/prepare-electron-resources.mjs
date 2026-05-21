@@ -24,13 +24,13 @@ const args = new Set(process.argv.slice(2));
 const skipNextBuild = args.has("--skip-next-build");
 const skipDownloads = args.has("--skip-downloads");
 
-const NODE_VERSION = "v20.18.0";
+const NODE_VERSION = "v26.2.0";
 const NODE_EXE_URL = `https://nodejs.org/dist/${NODE_VERSION}/win-x64/node.exe`;
 
 const packageJson = JSON.parse(readFileSync(resolve(ROOT, "package.json"), "utf-8"));
-const betterSqliteVersion = (packageJson.dependencies["better-sqlite3"] || "12.6.2").replace(/^[^\d]*/, "");
+const betterSqliteVersion = (packageJson.dependencies["better-sqlite3"] || "12.10.0").replace(/^[^\d]*/, "");
 const BETTER_SQLITE3_VERSION = `v${betterSqliteVersion}`;
-const NODE_ABI = "v115";
+const NODE_ABI = "v147";
 const BETTER_SQLITE3_URL =
   `https://github.com/WiseLibs/better-sqlite3/releases/download/${BETTER_SQLITE3_VERSION}/` +
   `better-sqlite3-${BETTER_SQLITE3_VERSION}-node-${NODE_ABI}-win32-x64.tar.gz`;
@@ -127,7 +127,7 @@ await build({
   entryPoints: [resolve(ROOT, "server.ts")],
   bundle: true,
   platform: "node",
-  target: "node20",
+  target: "node26",
   format: "cjs",
   outfile: resolve(DIST, "server.js"),
   banner: {

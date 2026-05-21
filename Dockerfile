@@ -1,4 +1,4 @@
-FROM node:20-alpine AS base
+FROM node:26-alpine AS base
 
 # Install dependencies (including native build tools for better-sqlite3)
 FROM base AS deps
