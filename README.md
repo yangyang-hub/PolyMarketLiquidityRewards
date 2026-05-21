@@ -12,6 +12,8 @@
 
 当前版本**不是**完整的自动做市机器人。项目里已经有下单能力封装，但主流程仍以“监控 + 撤单风控”为主。
 
+协作维护说明见 [AGENT.md](./AGENT.md)。后续每次代码变更都需要同步检查并更新该文档。
+
 ## 功能概览
 
 - 多账户管理
@@ -52,6 +54,7 @@
 
 ```text
 .
+├── AGENT.md                     # 代码代理协作与维护规则
 ├── server.ts                    # 自定义 HTTP + WebSocket 入口
 ├── src/app                      # Next.js 页面与 API 路由
 ├── src/lib/clob                 # CLOB 客户端、执行器、盘口订阅
@@ -60,8 +63,10 @@
 ├── src/lib/db                   # SQLite 与私钥加密
 ├── src/lib/strategy             # 撤单策略
 ├── src/stores                   # 前端状态
+├── electron/                    # Electron 主进程与 preload
 ├── data/                        # 运行时数据目录（自动生成）
-└── scripts/package.mjs          # Windows 便携版打包脚本
+├── scripts/                     # Electron / legacy 打包脚本
+└── vendor/                      # 依赖覆盖用本地 stub 包
 ```
 
 ## 环境要求
@@ -111,6 +116,7 @@ npm run start
 | `CLOB_HOST` | `https://clob.polymarket.com` | CLOB REST Host |
 | `CLOB_WS_HOST` | `wss://ws-subscriptions-clob.polymarket.com` | CLOB WebSocket Host |
 | `GAMMA_HOST` | `https://gamma-api.polymarket.com` | Gamma API Host |
+| `APP_DATA_DIR` | `data` | 运行时数据库和本地加密密钥目录 |
 
 ## 首次使用
 
@@ -215,19 +221,33 @@ Gamma API **不负责盘口数据**。
 
 ## 打包
 
-项目提供 Windows 便携版打包脚本：
+项目提供 Electron 桌面端打包脚本。默认 `npm run package` 会执行 Windows NSIS 安装包构建：
 
 ```bash
 npm run package
 ```
 
-打包脚本会：
+常用桌面端命令：
+
+```bash
+npm run desktop:dev            # Electron 开发模式
+npm run desktop:pack           # Windows dir 目录包
+npm run desktop:dist           # Windows NSIS 安装包
+npm run desktop:dist:portable  # Windows portable 包
+```
+
+旧版自定义便携打包脚本仍保留为：
+
+```bash
+npm run package:legacy
+```
+
+Electron 打包流程会：
 
 1. 执行 `next build`
-2. 用 esbuild 打包 `server.ts`
-3. 组装 `dist/`
-4. 下载 Windows `node.exe`
-5. 下载 `better-sqlite3` 预编译模块
+2. 构建 Electron 主进程代码
+3. 准备服务端运行资源
+4. 通过 `electron-builder` 生成 Windows 安装包或便携包
 
 ## 常见问题
 
@@ -271,9 +291,21 @@ npm run package
 ## 开发命令
 
 ```bash
-npm run dev      # 开发模式
-npm run build    # 生产构建
-npm run start    # 生产启动
-npm run lint     # ESLint
-npm run package  # Windows 便携版打包
+npm run dev                    # 开发模式
+npm run build                  # 生产构建
+npm run start                  # 生产启动
+npm run lint                   # ESLint
+npm run package                # 默认 Windows Electron 安装包
+npm run desktop:dev            # Electron 开发模式
+npm run desktop:dist:portable  # Windows Electron 便携包
 ```
+
+当前 `package.json` 没有独立 `test` 脚本。常规变更优先使用 `npm run lint` 和 `npm run build` 验证。
+
+## 开发协作约定
+
+- 代码代理维护规则写在 [AGENT.md](./AGENT.md)。
+- 每次代码变更后都要同步检查 `AGENT.md`。
+- 如果变更影响架构、命令、依赖、API、环境变量、数据存储、安全假设、打包流程或用户工作流，需要同步更新 `AGENT.md` 的对应章节。
+- 如果代码变更不需要修改 `AGENT.md` 正文，也要在该文件的 `Sync Log` 记录已检查。
+- 不要提交私钥、`.env`、`data/app.db`、`data/.encryption-key`、`.next/`、`dist/`、`release/` 等本地运行或构建产物。
