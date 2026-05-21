@@ -170,6 +170,7 @@ Before handing off code changes, run the most relevant commands:
 - On Windows, run packaging from a local drive path, not a UNC path such as `\\tsclient\...`; `cmd.exe` falls back to `C:\Windows` for UNC working directories.
 - Windows packaging requires Node.js 26.x and platform-specific optional native packages such as `lightningcss-win32-x64-msvc`; after switching Node versions, reinstall dependencies with `npm install --include=optional`.
 - `scripts/prepare-electron-icons.mjs` generates `.cache/electron/logo.ico` from `public/logo.png` before Electron Builder runs; `electron/installer.nsh` reapplies that icon to desktop and Start Menu shortcuts.
+- `scripts/prepare-electron-resources.mjs` prunes traced `data`, `release`, `dist*`, and `.cache` directories from `.next/standalone`/`dist-server`; it renames standalone `node_modules` to `server-vendor` because Electron Builder filters `node_modules` inside `extraResources`.
 - Windows packaging extracts the downloaded `better-sqlite3` tarball through Node.js code in `scripts/script-utils.mjs`, not the system `tar` command.
 - Before `next build`, Windows packaging ensures root `node_modules/better-sqlite3` has the Node 26 native module so build-time API route imports do not require Python/node-gyp.
 - Electron Builder has `npmRebuild` disabled because packaged `better-sqlite3` runs in the bundled Node 26 backend from `dist-server`, not in Electron's main process.
@@ -188,6 +189,7 @@ If verification cannot be run because of missing network, credentials, platform 
 - 2026-05-21: Added a pre-Next-build Windows `better-sqlite3` native module bootstrap so fresh `npm install` runs can package without local Python/node-gyp.
 - 2026-05-21: Added Electron icon preparation from `public/logo.png` and an NSIS install hook so installer, uninstaller, desktop shortcut, and Start Menu shortcut use the project logo.
 - 2026-05-21: Fixed packaged tray icon lookup to use external `resources/logo.ico` and made enabled-account auto-start run in the background so it cannot block backend readiness.
+- 2026-05-21: Staged Next standalone dependencies as `server-vendor`, added `NODE_PATH` for the bundled backend, and pruned traced local runtime/build directories to avoid missing `next` and leaking local data.
 - 2026-05-21: Disabled Electron Builder Windows exe resource editing in addition to `.exe` signing to avoid `winCodeSign.7z` extraction on machines without symlink privileges.
 - 2026-05-21: Configured Electron Builder to skip `.exe` signing for local Windows packages, avoiding `winCodeSign.7z` symlink extraction failures.
 - 2026-05-21: Migrated the project baseline from Node 20 to Node 26 only, including package engines, Docker image, esbuild targets, Windows bundled `node.exe`, and `better-sqlite3` Node ABI.

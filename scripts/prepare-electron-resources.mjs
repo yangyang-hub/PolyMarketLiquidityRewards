@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   rmSync,
 } from "fs";
 import { get as httpsGet } from "https";
@@ -29,6 +30,7 @@ const CACHE = resolve(ROOT, ".cache", "electron");
 const args = new Set(process.argv.slice(2));
 const skipNextBuild = args.has("--skip-next-build");
 const skipDownloads = args.has("--skip-downloads");
+const tracedNoiseDirs = ["data", "dist", "dist-server", "dist-electron", "release", ".cache"];
 
 const NODE_VERSION = "v26.2.0";
 const NODE_EXE_URL = `https://nodejs.org/dist/${NODE_VERSION}/win-x64/node.exe`;
@@ -123,6 +125,25 @@ async function ensureBuildTimeBetterSqliteNative() {
   console.log(`  已安装 ${nativeEntry} -> ${nativeDest}`);
 }
 
+function pruneTracedNoise(baseDir) {
+  for (const dir of tracedNoiseDirs) {
+    rmSync(resolve(baseDir, dir), { recursive: true, force: true });
+  }
+}
+
+function stageServerVendorModules() {
+  const nodeModulesDir = resolve(DIST, "node_modules");
+  const vendorDir = resolve(DIST, "server-vendor");
+  rmSync(vendorDir, { recursive: true, force: true });
+
+  if (!existsSync(nodeModulesDir)) {
+    throw new Error("Next standalone 未生成 node_modules，打包后的后端将无法加载 next。");
+  }
+
+  renameSync(nodeModulesDir, vendorDir);
+  console.log("  已暂存服务端依赖：dist-server/server-vendor");
+}
+
 await ensureBuildTimeBetterSqliteNative();
 
 console.log("\n========== 1. 构建 Next.js ==========");
@@ -141,7 +162,9 @@ if (!existsSync(standaloneDir)) {
   throw new Error("未找到 .next/standalone，请确认 next.config.ts 已设置 output: 'standalone'");
 }
 
+pruneTracedNoise(standaloneDir);
 cpSync(standaloneDir, DIST, { recursive: true });
+pruneTracedNoise(DIST);
 
 const staticSrc = resolve(ROOT, ".next", "static");
 const staticDest = resolve(DIST, ".next", "static");
@@ -201,5 +224,7 @@ if (skipDownloads) {
 
   rmSync(tarDest, { force: true });
 }
+
+stageServerVendorModules();
 
 console.log("\n后端资源准备完成：dist-server/");

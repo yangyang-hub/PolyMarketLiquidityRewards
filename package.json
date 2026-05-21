@@ -40,7 +40,16 @@
     "extraResources": [
       {
         "from": "dist-server",
-        "to": "server"
+        "to": "server",
+        "filter": [
+          "**/*",
+          "!data/**",
+          "!dist/**",
+          "!dist-server/**",
+          "!dist-electron/**",
+          "!release/**",
+          "!.cache/**"
+        ]
       },
       {
         "from": ".cache/electron/logo.ico",

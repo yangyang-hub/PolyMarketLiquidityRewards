@@ -271,6 +271,10 @@ async function startBackend(): Promise<string> {
     cwd: serverDir,
     env: {
       ...process.env,
+      NODE_PATH: [
+        path.join(serverDir, "server-vendor"),
+        process.env.NODE_PATH || "",
+      ].filter(Boolean).join(path.delimiter),
       NODE_ENV: "production",
       HOST: "127.0.0.1",
       PORT: String(port),

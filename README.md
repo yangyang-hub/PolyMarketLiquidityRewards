@@ -233,6 +233,7 @@ Windows 打包注意：
 - 不要从 `\\tsclient\...` 这类 UNC 共享路径直接运行 `npm run package`；Windows `cmd.exe` 不支持把 UNC 路径作为当前目录，会退回到 `C:\Windows` 并导致找不到 `package.json`。
 - 打包脚本会直接调用 `node_modules` 里的本地 CLI，不依赖全局 `npx`。
 - 打包脚本会从 `public/logo.png` 生成临时 `.cache/electron/logo.ico`，安装包、卸载程序、桌面快捷方式和开始菜单快捷方式都会使用这个图标。
+- 打包脚本会把 Next standalone 运行所需的 `node_modules` 暂存为 `server-vendor`，避免 Electron Builder 过滤依赖，同时从服务端资源里剔除本地 `data/`、`release/`、`dist*` 等运行或构建产物。
 - 打包脚本使用 Node.js 直接解压 `better-sqlite3` 预编译包，不依赖系统 `tar`，避免 `C:\...` 路径被当成远程归档地址。
 - 如果 `npm install` 没有生成根目录 `node_modules/better-sqlite3` 的 `.node` 文件，打包脚本会在 `next build` 前自动安装 Node 26 Windows 预编译模块，避免构建期加载数据库时报错。
 - Electron Builder 已关闭 `npmRebuild`；后端使用 `dist-server` 中的 Node 26 预编译 `better-sqlite3`，不需要本机 Python/node-gyp。
