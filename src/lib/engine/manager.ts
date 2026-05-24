@@ -487,6 +487,10 @@ class EngineManager {
     return store.getAccountStates();
   }
 
+  getAccountState(name: string): AccountState | undefined {
+    return store.accounts.get(this.resolveAccountName(name));
+  }
+
   getDiscoveredMarkets(): DiscoveredMarket[] {
     return store.getDiscoveredMarketsList();
   }

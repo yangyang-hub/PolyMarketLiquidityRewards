@@ -18,7 +18,7 @@
 
 - 多账户管理
   - 支持添加、编辑、删除账户
-  - 支持 EOA / Proxy / Gnosis Safe 签名类型配置
+  - 支持 EOA / Proxy / Gnosis Safe / POLY_1271 Deposit Wallet 签名类型配置
   - 支持账户启停，重启后自动恢复已启用账户
 - 盘口监控
   - 后端订阅 Polymarket CLOB V2 WebSocket
@@ -144,8 +144,10 @@ npm run start
   - `0`: EOA
   - `1`: Proxy
   - `2`: Gnosis Safe
+  - `3`: POLY_1271 / Deposit Wallet
 - `proxyWallet`
-  - 当使用 Proxy / Safe 模式时，填写 Polymarket Profile / Funder 地址
+  - 当使用 Proxy / Safe / Deposit Wallet 模式时，填写 Polymarket Profile / Funder 地址
+  - V2 新 API 用户通常应选择 `3`，这里填写 Polymarket 设置页显示的 Deposit Wallet 地址；私钥仍填写该 Deposit Wallet owner/signer 的私钥
 
 ## 撤单策略说明
 

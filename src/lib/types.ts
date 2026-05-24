@@ -45,7 +45,7 @@ export interface DiscoveredMarket {
 export interface AccountConfig {
   name: string;
   privateKey: string;
-  signatureType: number; // V2: 0=EOA, 1=Proxy, 2=GnosisSafe
+  signatureType: number; // V2: 0=EOA, 1=Proxy, 2=GnosisSafe, 3=POLY_1271 deposit wallet
   proxyWallet?: string;
 }
 

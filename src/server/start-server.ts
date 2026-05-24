@@ -29,6 +29,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Sta
   const handle = app.getRequestHandler();
 
   await app.prepare();
+  const nextUpgradeHandler = app.getUpgradeHandler();
 
   const server = createServer((req, res) => {
     handle(req, res);
@@ -36,7 +37,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Sta
 
   const wss = new WebSocketServer({ noServer: true });
 
-  server.on("upgrade", (req, socket, head) => {
+  server.on("upgrade", async (req, socket, head) => {
     const { pathname } = new URL(req.url ?? "/", "http://localhost");
     if (pathname === "/ws") {
       wss.handleUpgrade(req, socket, head, (ws) => {
@@ -50,6 +51,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<Sta
 
         ws.on("close", () => engineManager.removeClient(ws));
       });
+    } else if (dev && pathname === "/_next/webpack-hmr") {
+      await nextUpgradeHandler(req, socket, head);
     } else {
       socket.destroy();
     }

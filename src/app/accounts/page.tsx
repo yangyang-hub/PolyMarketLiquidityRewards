@@ -20,20 +20,24 @@ interface AccountForm {
 const emptyForm: AccountForm = {
   name: "",
   privateKey: "",
-  signatureType: 1,
+  signatureType: 3,
   proxyWallet: "",
 };
+
+const SIGNATURE_TYPES = [0, 1, 2, 3] as const;
 
 const SIG_TYPE_LABELS: Record<number, string> = {
   0: "外部账户",
   1: "代理钱包",
   2: "多签钱包",
+  3: "Deposit 钱包",
 };
 
 const SIG_TYPE_DESCRIPTIONS: Record<number, string> = {
   0: "直接用私钥签名",
   1: "通过代理合约签名",
   2: "多签钱包授权",
+  3: "POLY_1271 授权",
 };
 
 const NAME_RE = /^[a-zA-Z0-9_\-]{1,64}$/;
@@ -77,8 +81,12 @@ function validateForm(
     }
   }
 
-  if ((form.signatureType === 1 || form.signatureType === 2) && form.proxyWallet.trim()) {
-    if (!ETH_ADDR_RE.test(form.proxyWallet.trim())) {
+  const needsFunderAddress = form.signatureType !== 0;
+  const funderAddress = form.proxyWallet.trim();
+  if (needsFunderAddress) {
+    if (!funderAddress) {
+      errors.proxyWallet = "请输入资金钱包地址";
+    } else if (!ETH_ADDR_RE.test(funderAddress)) {
       errors.proxyWallet = "地址格式不正确，需要 0x + 40 位十六进制字符";
     }
   }
@@ -469,7 +477,12 @@ export default function AccountsPage() {
     ]),
   ];
 
-  const showNeedsProxy = form.signatureType === 1 || form.signatureType === 2;
+  const showNeedsFunder = form.signatureType !== 0;
+  const funderLabel = form.signatureType === 3 ? "Deposit 钱包地址" : "资金钱包地址";
+  const funderHelp =
+    form.signatureType === 3
+      ? "填写 Polymarket 设置页显示的 deposit wallet / funder 地址"
+      : "填写 Polymarket Profile / Funder 地址";
 
   return (
     <div className="min-h-full space-y-4 bg-[var(--terminal-bg)] p-4">
@@ -478,7 +491,7 @@ export default function AccountsPage() {
         <div>
           <h2 className="text-[22px] font-semibold">账户管理</h2>
           <p className="terminal-data terminal-muted mt-1">
-            管理做市账户的私钥、签名类型与代理钱包配置
+            管理做市账户的私钥、签名类型与资金钱包配置
           </p>
         </div>
         <button className="terminal-action primary" onClick={openAddModal}>
@@ -672,8 +685,8 @@ export default function AccountsPage() {
                   签名类型
                 </span>
               </label>
-              <div className="grid grid-cols-3 gap-2">
-                {([0, 1, 2] as const).map((val) => (
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                {SIGNATURE_TYPES.map((val) => (
                   <label
                     key={val}
                     className={`flex flex-col items-center gap-0.5 p-2.5 rounded-lg border cursor-pointer transition-all ${
@@ -701,13 +714,13 @@ export default function AccountsPage() {
               </div>
             </div>
 
-            {/* Proxy Wallet (conditional) */}
-            {showNeedsProxy && (
+            {/* Funder wallet (conditional) */}
+            {showNeedsFunder && (
               <div className="form-control">
                 <label className="label pb-1">
                   <span className="label-text flex items-center gap-1.5 text-sm">
                     <IconWallet className="h-3.5 w-3.5 opacity-50" />
-                    代理钱包地址
+                    {funderLabel}
                   </span>
                 </label>
                 <input
@@ -733,7 +746,7 @@ export default function AccountsPage() {
                 ) : (
                   <label className="label pt-1 pb-0">
                     <span className="label-text-alt opacity-40">
-                      预测市场代理钱包的以太坊地址
+                      {funderHelp}
                     </span>
                   </label>
                 )}

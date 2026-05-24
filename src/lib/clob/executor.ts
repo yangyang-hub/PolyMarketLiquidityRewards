@@ -80,22 +80,26 @@ export class ClobExecutor {
   }
 
   async initApiKeys(): Promise<void> {
+    let createError: unknown;
+
     try {
-      const resp = await this.client.getApiKeys();
-      if (!resp?.apiKeys || resp.apiKeys.length === 0) {
-        const creds = await this.client.createApiKey();
-        console.log(`[${this.accountName}] API key created`);
-        this.rebuildClient(creds);
-      } else {
-        const creds = await this.client.deriveApiKey();
-        console.log(`[${this.accountName}] API key derived (${resp.apiKeys.length} keys exist)`);
-        this.rebuildClient(creds);
-      }
-    } catch (e: unknown) {
-      console.warn(`[${this.accountName}] initApiKeys primary path failed: ${errorMessage(e)}, trying createOrDerive...`);
-      const creds = await this.client.createOrDeriveApiKey();
-      console.log(`[${this.accountName}] API key createOrDerive succeeded`);
+      const creds = await this.client.createApiKey();
+      console.log(`[${this.accountName}] API key created`);
       this.rebuildClient(creds);
+      return;
+    } catch (e: unknown) {
+      createError = e;
+      console.warn(`[${this.accountName}] createApiKey failed: ${errorMessage(e)}, trying deriveApiKey...`);
+    }
+
+    try {
+      const creds = await this.client.deriveApiKey();
+      console.log(`[${this.accountName}] API key derived`);
+      this.rebuildClient(creds);
+    } catch (deriveError: unknown) {
+      throw new Error(
+        `无法创建或派生 CLOB API Key。create=${errorMessage(createError)}; derive=${errorMessage(deriveError)}`,
+      );
     }
   }
 
