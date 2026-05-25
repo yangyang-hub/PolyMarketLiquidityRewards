@@ -5,6 +5,7 @@ import { getClobWsHost } from "../config";
 
 type OrderBookCallback = (tokenId: string, book: OrderBook) => void;
 type TradeCallback = (trade: TradeUpdate) => void;
+type StatusCallback = (connected: boolean) => void;
 
 export interface TradeUpdate {
   tokenId: string;
@@ -74,6 +75,7 @@ export class ClobWsFeed {
   private subscribedTokens: Set<string> = new Set();
   private onUpdate: OrderBookCallback;
   private onTrade?: TradeCallback;
+  private onStatus?: StatusCallback;
   private running = false;
   private backoff = 1000;
   private maxBackoff = 60000;
@@ -89,9 +91,10 @@ export class ClobWsFeed {
 
   public connected = false;
 
-  constructor(onUpdate: OrderBookCallback, onTrade?: TradeCallback) {
+  constructor(onUpdate: OrderBookCallback, onTrade?: TradeCallback, onStatus?: StatusCallback) {
     this.onUpdate = onUpdate;
     this.onTrade = onTrade;
+    this.onStatus = onStatus;
   }
 
   start(): void {
@@ -102,7 +105,7 @@ export class ClobWsFeed {
 
   stop(): void {
     this.running = false;
-    this.connected = false;
+    this.setConnected(false);
     this.clearTimers();
     if (this.ws) {
       this.ws.close();
@@ -151,7 +154,7 @@ export class ClobWsFeed {
     this.ws.on("open", () => {
       console.log("[WsFeed] Connected");
       this.backoff = 1000;
-      this.connected = true;
+      this.setConnected(true);
 
       // Subscribe to all tracked tokens
       if (this.subscribedTokens.size > 0) {
@@ -199,7 +202,7 @@ export class ClobWsFeed {
 
     this.ws.on("close", (code, reason) => {
       console.log(`[WsFeed] Disconnected (code=${code}, reason=${reason?.toString() || ""})`);
-      this.connected = false;
+      this.setConnected(false);
       this.ws = null;
       this.stopHeartbeat();
       this.stopSnapshotTimer();
@@ -481,7 +484,7 @@ export class ClobWsFeed {
   }
 
   private forceReconnect(): void {
-    this.connected = false;
+    this.setConnected(false);
     this.stopHeartbeat();
     this.stopSnapshotTimer();
     if (this.ws) {
@@ -489,5 +492,11 @@ export class ClobWsFeed {
       this.ws = null;
     }
     this.scheduleReconnect();
+  }
+
+  private setConnected(connected: boolean): void {
+    if (this.connected === connected) return;
+    this.connected = connected;
+    this.onStatus?.(connected);
   }
 }

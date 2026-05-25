@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, shell } from "electron";
+import { app, BrowserWindow, Menu, Tray, dialog, ipcMain, nativeImage, shell, session } from "electron";
 import { spawn, type ChildProcess } from "child_process";
 import { createWriteStream, existsSync, mkdirSync, readFileSync } from "fs";
 import { get, request } from "http";
@@ -15,6 +15,15 @@ let serverUrl = "";
 let isQuitting = false;
 let logDir = "";
 let dataDir = "";
+
+const PROXY_ENV_KEYS = [
+  "HTTPS_PROXY",
+  "HTTP_PROXY",
+  "ALL_PROXY",
+  "https_proxy",
+  "http_proxy",
+  "all_proxy",
+];
 
 function getIconPath(): string | undefined {
   const appRoot = process.env.APP_ROOT || app.getAppPath();
@@ -123,6 +132,55 @@ function readLogTail(file: string, maxChars = 4_000): string {
     return content.slice(-maxChars).trim();
   } catch {
     return "";
+  }
+}
+
+function hasProxyEnv(env: NodeJS.ProcessEnv): boolean {
+  return PROXY_ENV_KEYS.some((key) => Boolean(env[key]));
+}
+
+function parseElectronProxyRules(rules: string): Record<string, string> {
+  for (const rule of rules.split(";")) {
+    const normalized = rule.trim().replace(/\s+/g, " ");
+    if (!normalized || normalized.toUpperCase() === "DIRECT") continue;
+
+    const [kindRaw, target] = normalized.split(" ");
+    const kind = kindRaw.toUpperCase();
+    if (!target) continue;
+
+    if (kind === "PROXY" || kind === "HTTP" || kind === "HTTPS") {
+      const protocol = kind === "HTTPS" ? "https" : "http";
+      const proxy = `${protocol}://${target}`;
+      return {
+        HTTPS_PROXY: proxy,
+        HTTP_PROXY: proxy,
+      };
+    }
+
+    if (kind.startsWith("SOCKS")) {
+      console.warn(`检测到系统 SOCKS 代理但内置后端仅自动继承 HTTP/HTTPS 代理：${normalized}`);
+    }
+  }
+
+  return {};
+}
+
+async function resolveSystemProxyEnv(): Promise<Record<string, string>> {
+  if (hasProxyEnv(process.env)) return {};
+
+  const targetUrl = process.env.CLOB_HOST || "https://clob.polymarket.com";
+
+  try {
+    const rules = await session.defaultSession.resolveProxy(targetUrl);
+    const proxyEnv = parseElectronProxyRules(rules);
+    if (Object.keys(proxyEnv).length > 0) {
+      console.log(`内置后端继承系统代理：${rules}`);
+    }
+    return proxyEnv;
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : String(e);
+    console.warn(`读取系统代理失败：${message}`);
+    return {};
   }
 }
 
@@ -269,11 +327,13 @@ async function startBackend(): Promise<string> {
 
   const stdout = createWriteStream(path.join(logDir, "backend.log"), { flags: "a" });
   const stderr = createWriteStream(path.join(logDir, "backend-error.log"), { flags: "a" });
+  const proxyEnv = await resolveSystemProxyEnv();
 
   serverProcess = spawn(nodePath, [serverEntry], {
     cwd: serverDir,
     env: {
       ...process.env,
+      ...proxyEnv,
       NODE_PATH: [
         path.join(serverDir, "server-vendor"),
         process.env.NODE_PATH || "",

@@ -26,6 +26,8 @@ import { AccountEngine } from "./engine";
 import { getWalletAddress } from "../clob/wallet";
 
 const ACCOUNT_NAME_RE = /^[a-zA-Z0-9_\-]{1,64}$/;
+const ETH_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+const VALID_SIGNATURE_TYPES = new Set([0, 1, 2, 3]);
 
 function normalizeAccountName(name: string): string {
   const normalized = name.trim();
@@ -39,6 +41,38 @@ function normalizeAccountName(name: string): string {
 function normalizeProxyWallet(proxyWallet?: string): string | undefined {
   const normalized = proxyWallet?.trim();
   return normalized || undefined;
+}
+
+function normalizeSignatureSettings(
+  signatureType: unknown,
+  proxyWallet?: string,
+): { signatureType: number; proxyWallet?: string } {
+  if (signatureType != null && typeof signatureType !== "number") {
+    throw new Error("签名类型不正确，仅支持 0、1、2、3");
+  }
+
+  const normalizedSignatureType = Math.floor(signatureType ?? 0);
+
+  if (!VALID_SIGNATURE_TYPES.has(normalizedSignatureType)) {
+    throw new Error("签名类型不正确，仅支持 0、1、2、3");
+  }
+
+  if (normalizedSignatureType === 0) {
+    return { signatureType: normalizedSignatureType };
+  }
+
+  const normalizedProxyWallet = normalizeProxyWallet(proxyWallet);
+  if (!normalizedProxyWallet) {
+    throw new Error("非 EOA 签名类型必须填写资金钱包地址");
+  }
+  if (!ETH_ADDRESS_RE.test(normalizedProxyWallet)) {
+    throw new Error("资金钱包地址格式不正确，需要 0x + 40 位十六进制字符");
+  }
+
+  return {
+    signatureType: normalizedSignatureType,
+    proxyWallet: normalizedProxyWallet,
+  };
 }
 
 class EngineManager {
@@ -70,6 +104,7 @@ class EngineManager {
         }
       },
       (trade) => this.handleTradeUpdate(trade),
+      () => this.broadcastSystemStatus(),
     );
   }
 
@@ -173,23 +208,31 @@ class EngineManager {
    * Called by engines after each tick with the set of tokenIds that have active orders.
    * Aggregates across all engines and syncs WS subscriptions accordingly.
    */
-  private async handleTokensDiscovered(_accountName: string, tokenIds: Set<string>): Promise<void> {
+  private async handleTokensDiscovered(accountName: string, tokenIds: Set<string>): Promise<void> {
     // Aggregate all active tokenIds across all running engines
-    const allTokenIds = new Set<string>();
+    const allTokenIds = this.collectActiveTokenIds();
     // Include the just-reported tokens
-    for (const id of tokenIds) allTokenIds.add(id);
-    // Include tokens from other running engines' latest known orders
+    // Pending reset placements are not always visible in activeOrders yet.
+    if (this.engines.get(accountName)?.isRunning()) {
+      for (const id of tokenIds) allTokenIds.add(id);
+    }
+
+    await this.syncSubscriptions(allTokenIds);
+  }
+
+  private collectActiveTokenIds(): Set<string> {
+    const tokenIds = new Set<string>();
     for (const [name, engine] of this.engines) {
       if (!engine.isRunning()) continue;
       const state = store.accounts.get(name);
       if (state) {
         for (const order of state.activeOrders) {
-          allTokenIds.add(order.tokenId);
+          tokenIds.add(order.tokenId);
         }
       }
     }
 
-    await this.syncSubscriptions(allTokenIds);
+    return tokenIds;
   }
 
   /**
@@ -281,6 +324,7 @@ class EngineManager {
       for (const id of goneTokenIds) {
         store.deleteOrderBook(id);
       }
+      this.broadcast({ type: "orderbooks_removed", tokenIds: goneTokenIds });
 
       // Clean up discovered markets that no longer have any active tokens
       for (const [conditionId, market] of store.discoveredMarkets) {
@@ -309,21 +353,26 @@ class EngineManager {
     proxyWallet?: string,
   ): Promise<void> {
     const normalizedName = normalizeAccountName(name);
-    const normalizedProxyWallet = normalizeProxyWallet(proxyWallet);
+    const normalizedSettings = normalizeSignatureSettings(signatureType, proxyWallet);
     if (this.hasAccountName(normalizedName)) throw new Error(`账户已存在：${normalizedName}`);
 
     // Validate private key
     const address = getWalletAddress(privateKey);
 
     // Write to DB
-    dbAddAccount(normalizedName, privateKey, signatureType, normalizedProxyWallet);
+    dbAddAccount(
+      normalizedName,
+      privateKey,
+      normalizedSettings.signatureType,
+      normalizedSettings.proxyWallet,
+    );
 
     // Update in-memory config
     const acc: AccountConfig = {
       name: normalizedName,
       privateKey,
-      signatureType,
-      proxyWallet: normalizedProxyWallet,
+      signatureType: normalizedSettings.signatureType,
+      proxyWallet: normalizedSettings.proxyWallet,
     };
     this.accountConfigs.push(acc);
 
@@ -361,7 +410,7 @@ class EngineManager {
     proxyWallet?: string,
   ): Promise<void> {
     const normalizedName = normalizeAccountName(name);
-    const normalizedProxyWallet = normalizeProxyWallet(proxyWallet);
+    const normalizedSettings = normalizeSignatureSettings(signatureType, proxyWallet);
     const existingName = this.resolveAccountName(name);
     const engine = this.engines.get(existingName);
     if (!engine) throw new Error(`未找到账户：${normalizedName}`);
@@ -372,7 +421,12 @@ class EngineManager {
     const nextPrivateKey = privateKey ?? currentConfig.privateKey;
     const address = getWalletAddress(nextPrivateKey);
 
-    dbUpdateAccount(existingName, privateKey, signatureType, normalizedProxyWallet);
+    dbUpdateAccount(
+      existingName,
+      privateKey,
+      normalizedSettings.signatureType,
+      normalizedSettings.proxyWallet,
+    );
 
     const newConfig = dbGetAccountConfig(existingName);
     if (!newConfig) throw new Error(`账户更新后无法从数据库读取：${normalizedName}`);
@@ -387,6 +441,7 @@ class EngineManager {
     this.createEngine(newConfig);
 
     store.updateAccount(existingName, { status: "idle", address });
+    await this.syncSubscriptions(this.collectActiveTokenIds());
 
     this.broadcast({ type: "account_state", name: existingName, state: store.accounts.get(existingName)! });
     this.broadcast({ type: "account_configs", configs: dbGetAllAccountMetas() });
@@ -406,7 +461,9 @@ class EngineManager {
     this.engines.delete(normalizedName);
     this.accountConfigs = this.accountConfigs.filter((a) => a.name !== normalizedName);
     store.accounts.delete(normalizedName);
+    await this.syncSubscriptions(this.collectActiveTokenIds());
 
+    this.broadcast({ type: "account_removed", name: normalizedName });
     this.broadcast({ type: "account_configs", configs: dbGetAllAccountMetas() });
     this.broadcastSystemStatus();
   }
@@ -434,6 +491,7 @@ class EngineManager {
     if (!engine) return false;
     await engine.stop();
     dbSetAccountEnabled(normalizedName, false);
+    await this.syncSubscriptions(this.collectActiveTokenIds());
     this.broadcastSystemStatus();
     return true;
   }
@@ -459,8 +517,10 @@ class EngineManager {
       // Update account state: remove cancelled order from active list
       const state = store.accounts.get(normalizedName);
       if (state) {
+        const activeOrders = state.activeOrders.filter((o) => o.orderId !== orderId);
         store.updateAccount(normalizedName, {
-          activeOrders: state.activeOrders.filter((o) => o.orderId !== orderId),
+          activeOrders,
+          marketsCount: new Set(activeOrders.map((o) => o.tokenId)).size,
         });
         this.broadcast({
           type: "account_state",
@@ -468,6 +528,7 @@ class EngineManager {
           state: store.accounts.get(normalizedName)!,
         });
       }
+      await this.syncSubscriptions(this.collectActiveTokenIds());
     }
     return ok;
   }
@@ -478,8 +539,9 @@ class EngineManager {
     if (!engine) return false;
     const ok = await engine.cancelAllOrders();
     if (!ok) return false;
-    store.updateAccount(normalizedName, { activeOrders: [] });
+    store.updateAccount(normalizedName, { activeOrders: [], marketsCount: 0 });
     this.broadcast({ type: "account_state", name: normalizedName, state: store.accounts.get(normalizedName)! });
+    await this.syncSubscriptions(this.collectActiveTokenIds());
     return true;
   }
 

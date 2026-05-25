@@ -171,6 +171,26 @@ export const useAppStore = create<AppState>((set) => ({
         case "account_configs":
           return { accountConfigs: msg.configs };
 
+        case "account_removed":
+          return {
+            accounts: state.accounts.filter((account) => account.name !== msg.name),
+            accountConfigs: state.accountConfigs.filter((config) => config.name !== msg.name),
+          };
+
+        case "orderbooks_removed": {
+          const removed = new Set(msg.tokenIds);
+          const nextOrderbooks = { ...state.orderbooks };
+          for (const tokenId of msg.tokenIds) {
+            delete nextOrderbooks[tokenId];
+          }
+          return {
+            orderbooks: nextOrderbooks,
+            selectedMarketTokenId: state.selectedMarketTokenId && removed.has(state.selectedMarketTokenId)
+              ? null
+              : state.selectedMarketTokenId,
+          };
+        }
+
         default:
           return {};
       }

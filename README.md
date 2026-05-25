@@ -283,11 +283,27 @@ Electron 打包流程会：
 
 不直接影响 CLOB 订单簿抓取。
 
-### 2. “禁用”是什么意思？
+### 2. `无法创建或派生 CLOB API Key`
+
+如果错误里包含 `ETIMEDOUT`、`ENETUNREACH`、`ENOTFOUND` 等字样，通常是本机运行环境无法连接 CLOB REST：
+
+```text
+https://clob.polymarket.com
+```
+
+先在同一台机器测试：
+
+```bash
+curl -I --connect-timeout 10 https://clob.polymarket.com
+```
+
+正常连通时可能返回 `405`，这表示服务可达；如果仍然超时，请检查 VPN、代理、DNS，或确认没有把 `CLOB_HOST` 改成不可达地址。桌面版会尝试继承系统 HTTP/HTTPS 代理；开发模式下也可以在启动前手动设置 `HTTPS_PROXY` / `HTTP_PROXY`。
+
+### 3. “禁用”是什么意思？
 
 撤单设置里的“禁用”表示 `cancelDepthLevel = 0`，即完全关闭自动撤单。
 
-### 3. 能不能跟某个地址的挂单？
+### 4. 能不能跟某个地址的挂单？
 
 当前公开订单簿是聚合价位，不包含外部地址的单笔 open order 明细。
 

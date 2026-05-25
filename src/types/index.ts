@@ -121,4 +121,12 @@ export type WsMessage =
   | {
       type: "account_configs";
       configs: AccountConfigDto[];
+    }
+  | {
+      type: "account_removed";
+      name: string;
+    }
+  | {
+      type: "orderbooks_removed";
+      tokenIds: string[];
     };

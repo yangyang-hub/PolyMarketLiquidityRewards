@@ -158,4 +158,12 @@ export type WsMessage =
   | {
       type: "account_configs";
       configs: AccountMeta[];
+    }
+  | {
+      type: "account_removed";
+      name: string;
+    }
+  | {
+      type: "orderbooks_removed";
+      tokenIds: string[];
     };

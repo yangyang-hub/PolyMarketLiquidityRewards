@@ -182,6 +182,7 @@ export class AccountEngine {
     store.updateAccount(this.account.name, {
       status: "idle",
       activeOrders: [],
+      marketsCount: 0,
     });
     this.broadcastState();
   }
@@ -192,12 +193,24 @@ export class AccountEngine {
 
   /** Cancel a single order by ID */
   async cancelOrderById(orderId: string): Promise<boolean> {
-    return this.executor.cancelOrder(orderId);
+    const ok = await this.executor.cancelOrder(orderId);
+    if (ok) {
+      this.resetDueAtByOrderId.delete(orderId);
+      this.pendingResetPlacements.delete(orderId);
+      this.realtimeCancelledIds.delete(orderId);
+    }
+    return ok;
   }
 
   /** Cancel all open orders for this account */
   async cancelAllOrders(): Promise<boolean> {
-    return this.executor.cancelAll();
+    const ok = await this.executor.cancelAll();
+    if (ok) {
+      this.pendingResetPlacements.clear();
+      this.resetDueAtByOrderId.clear();
+      this.realtimeCancelledIds.clear();
+    }
+    return ok;
   }
 
   /**
@@ -248,8 +261,10 @@ export class AccountEngine {
           // Remove from cached orders immediately
           const current = store.accounts.get(this.account.name);
           if (current) {
+            const activeOrders = current.activeOrders.filter((o) => o.orderId !== order.orderId);
             store.updateAccount(this.account.name, {
-              activeOrders: current.activeOrders.filter((o) => o.orderId !== order.orderId),
+              activeOrders,
+              marketsCount: new Set(activeOrders.map((o) => o.tokenId)).size,
             });
             this.broadcastState();
           }
@@ -513,7 +528,6 @@ export class AccountEngine {
       return {
         code: "depth_position",
         label: `买单进入前 ${config.cancelDepthLevel} 档`,
-        bypassCooldown: true,
         requiresRestConfirmation: true,
       };
     }

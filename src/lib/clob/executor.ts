@@ -97,9 +97,7 @@ export class ClobExecutor {
       console.log(`[${this.accountName}] API key derived`);
       this.rebuildClient(creds);
     } catch (deriveError: unknown) {
-      throw new Error(
-        `无法创建或派生 CLOB API Key。create=${errorMessage(createError)}; derive=${errorMessage(deriveError)}`,
-      );
+      throw clobApiKeyInitError(createError, deriveError);
     }
   }
 
@@ -262,5 +260,29 @@ export class ClobExecutor {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function isNetworkErrorMessage(message: string): boolean {
+  return /\b(ETIMEDOUT|ECONNREFUSED|ECONNRESET|ENETUNREACH|EHOSTUNREACH|ENOTFOUND|EAI_AGAIN)\b|timeout|network|socket hang up/i.test(message);
+}
+
+function clobApiKeyInitError(createError: unknown, deriveError: unknown): Error {
+  const createMessage = errorMessage(createError);
+  const deriveMessage = errorMessage(deriveError);
+  const baseMessage = `无法创建或派生 CLOB API Key。create=${createMessage}; derive=${deriveMessage}`;
+
+  if (!isNetworkErrorMessage(`${createMessage}; ${deriveMessage}`)) {
+    return new Error(baseMessage);
+  }
+
+  return new Error(
+    `${baseMessage}。这通常表示当前运行环境无法连接 Polymarket CLOB REST（https://clob.polymarket.com），不是钱包格式错误。请检查 VPN/代理/DNS；桌面版会尝试继承系统 HTTP/HTTPS 代理，也可以手动设置 HTTPS_PROXY/HTTP_PROXY 后重启应用。`,
+  );
 }

@@ -107,9 +107,10 @@ The `data/` directory is gitignored. Keep `data/app.db` and `data/.encryption-ke
 
 - Account management API calls delegate to `engineManager`.
 - Private keys are encrypted before database storage and never sent to the browser after creation/update.
+- EOA accounts (`signatureType = 0`) must not retain or submit a `proxyWallet`; Proxy/Safe/POLY_1271 accounts require a valid `0x` funder/deposit wallet address.
 - Enabled accounts are persisted through the `enabled` column and auto-started on server restart.
 - Running account engines poll CLOB open orders every 15 seconds, refresh collateral balance, check scoring status, and report active token ids.
-- `engineManager.syncSubscriptions()` aggregates active token ids across running engines, subscribes/unsubscribes the shared CLOB WebSocket feed, fetches unknown market metadata from Gamma, and updates browser clients.
+- `engineManager.syncSubscriptions()` aggregates active token ids across running engines, subscribes/unsubscribes the shared CLOB WebSocket feed, fetches unknown market metadata from Gamma, and updates browser clients. Account stop/remove, manual cancel, and cancel-all paths must also resync subscriptions so stale order books and discovered markets are removed promptly.
 
 ## Risk And Cancellation Flow
 
@@ -146,7 +147,7 @@ Current API route files:
 - `GET /api/markets`
 - `GET /api/markets/orderbooks`
 
-The browser WebSocket endpoint is `/ws`. Client messages currently only use `"PING"` and receive `"PONG"`; server-to-client application messages are JSON `WsMessage` payloads.
+The browser WebSocket endpoint is `/ws`. Client messages currently only use `"PING"` and receive `"PONG"`; server-to-client application messages are JSON `WsMessage` payloads. Cache removal is explicit: deleted accounts use `account_removed`, and unsubscribed token order books use `orderbooks_removed`.
 
 ## Change Guidelines
 
@@ -179,6 +180,7 @@ Before handing off code changes, run the most relevant commands:
 - The local HTTP server should become reachable before enabled accounts auto-start; account auto-start runs in the background to avoid desktop startup timeouts.
 - Do not add simulated in-page window controls to the top bar; the desktop app uses native OS minimize, maximize, and close controls.
 - Runtime time zone is `Asia/Shanghai`. Use `src/lib/time.ts` for user-visible or file-log timestamps, and pass `TZ: APP_TIME_ZONE` to bundled backend processes.
+- Docker builds use `.dockerignore` to exclude local runtime data, generated builds, caches, and environment files. Keep `data/`, `dist*/`, `release/`, `.cache/`, `.next/`, and private env/key material out of Docker build contexts.
 
 If verification cannot be run because of missing network, credentials, platform requirements, or long-running packaging constraints, state that clearly in the final response.
 
@@ -198,3 +200,4 @@ If verification cannot be run because of missing network, credentials, platform 
 - 2026-05-21: Configured Electron Builder to skip `.exe` signing for local Windows packages, avoiding `winCodeSign.7z` symlink extraction failures.
 - 2026-05-21: Migrated the project baseline from Node 20 to Node 26 only, including package engines, Docker image, esbuild targets, Windows bundled `node.exe`, and `better-sqlite3` Node ABI.
 - 2026-05-21: Created this `AGENT.md` from the current README, package scripts, and source structure. No business code was changed in this update.
+- 2026-05-25: Fixed account signature/funder normalization, restored depth-cancel cooldown behavior, added explicit WebSocket cache-removal messages, resynced subscriptions after stop/remove/manual cancellation paths, and added `.dockerignore` protection for local runtime/build data.

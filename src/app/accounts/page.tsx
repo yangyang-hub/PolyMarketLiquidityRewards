@@ -404,14 +404,14 @@ export default function AccountsPage() {
         await put(`/api/accounts/${encodeURIComponent(editingName)}`, {
           privateKey: form.privateKey.trim() || undefined,
           signatureType: form.signatureType,
-          proxyWallet: form.proxyWallet.trim() || undefined,
+          proxyWallet: form.signatureType === 0 ? undefined : form.proxyWallet.trim() || undefined,
         });
       } else {
         await post("/api/accounts", {
           name: form.name.trim(),
           privateKey: form.privateKey.trim(),
           signatureType: form.signatureType,
-          proxyWallet: form.proxyWallet.trim() || undefined,
+          proxyWallet: form.signatureType === 0 ? undefined : form.proxyWallet.trim() || undefined,
         });
       }
       modalRef.current?.close();
