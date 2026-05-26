@@ -4,6 +4,9 @@ import type { ApiKeyCreds, OpenOrder, MarketReward, OrdersScoring } from "@polym
 import type { AccountConfig } from "../types";
 import { createClobClient } from "./client";
 
+const COLLATERAL_BALANCE_PARAMS = { asset_type: AssetType.COLLATERAL };
+const COLLATERAL_DECIMALS = 1_000_000;
+
 // --- GCD ---
 
 function gcd(a: number, b: number): number {
@@ -231,11 +234,10 @@ export class ClobExecutor {
 
   async getCollateralBalance(): Promise<number> {
     try {
-      const resp = await this.client.getBalanceAllowance({
-        asset_type: AssetType.COLLATERAL,
-      });
-      const rawBalance = parseFloat(resp?.balance || "0");
-      const balance = rawBalance / 1e6;
+      await this.refreshAllowanceCache({ logSuccess: false });
+
+      const resp = await this.client.getBalanceAllowance(COLLATERAL_BALANCE_PARAMS);
+      const balance = parseCollateralBalance(resp?.balance);
       console.log(`[${this.accountName}] balance=$${balance}`);
       return balance;
     } catch (e: unknown) {
@@ -245,10 +247,12 @@ export class ClobExecutor {
   }
 
   /** Ask CLOB server to refresh its cached allowance for this wallet */
-  async refreshAllowanceCache(): Promise<void> {
+  async refreshAllowanceCache(options: { logSuccess?: boolean } = {}): Promise<void> {
     try {
-      await this.client.updateBalanceAllowance({ asset_type: AssetType.COLLATERAL });
-      console.log(`[${this.accountName}] Allowance cache refreshed`);
+      await this.client.updateBalanceAllowance(COLLATERAL_BALANCE_PARAMS);
+      if (options.logSuccess ?? true) {
+        console.log(`[${this.accountName}] Balance/allowance cache refreshed`);
+      }
     } catch (e: unknown) {
       console.warn(`[${this.accountName}] refreshAllowanceCache failed:`, errorMessage(e));
     }
@@ -269,6 +273,13 @@ function errorMessage(error: unknown): string {
   }
 }
 
+function parseCollateralBalance(rawBalance: unknown): number {
+  const raw = rawBalance == null || rawBalance === "" ? "0" : String(rawBalance);
+  const balance = new Decimal(raw);
+  if (!balance.isFinite()) return 0;
+  return balance.dividedBy(COLLATERAL_DECIMALS).toNumber();
+}
+
 function isNetworkErrorMessage(message: string): boolean {
   return /\b(ETIMEDOUT|ECONNREFUSED|ECONNRESET|ENETUNREACH|EHOSTUNREACH|ENOTFOUND|EAI_AGAIN)\b|timeout|network|socket hang up/i.test(message);
 }
@@ -283,6 +294,6 @@ function clobApiKeyInitError(createError: unknown, deriveError: unknown): Error 
   }
 
   return new Error(
-    `${baseMessage}。这通常表示当前运行环境无法连接 Polymarket CLOB REST（https://clob.polymarket.com），不是钱包格式错误。请检查 VPN/代理/DNS；桌面版会尝试继承系统 HTTP/HTTPS 代理，也可以手动设置 HTTPS_PROXY/HTTP_PROXY 后重启应用。`,
+    `${baseMessage}。这通常表示当前运行环境无法连接 Polymarket CLOB REST（https://clob.polymarket.com），不是钱包格式错误。请检查 VPN/代理/DNS；桌面版会尝试继承系统 HTTP/HTTPS/SOCKS 代理，也可以手动设置 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY 后重启应用。`,
   );
 }

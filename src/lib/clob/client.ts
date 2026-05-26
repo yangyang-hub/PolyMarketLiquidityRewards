@@ -12,7 +12,11 @@ function getChain(): Chain {
 
 export function createClobClient(account: AccountConfig, creds?: ApiKeyCreds): ClobClient {
   const chain = getChain();
-  const wallet = createClobWalletClient(account.privateKey, chain);
+  const funderAddress = account.proxyWallet;
+  const authAddress = account.signatureType === SignatureTypeV2.POLY_1271
+    ? funderAddress
+    : undefined;
+  const wallet = createClobWalletClient(account.privateKey, chain, authAddress);
 
   return new ClobClient({
     host: getClobHost(),
@@ -20,7 +24,7 @@ export function createClobClient(account: AccountConfig, creds?: ApiKeyCreds): C
     signer: wallet,
     creds,
     signatureType: account.signatureType as SignatureTypeV2,
-    funderAddress: account.proxyWallet,
+    funderAddress,
     throwOnError: true,
   });
 }

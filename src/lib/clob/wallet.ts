@@ -25,15 +25,46 @@ function getViemChain(chainId: number): ViemChain {
   };
 }
 
+function normalizeAddress(address: string): `0x${string}` {
+  const value = address.trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(value)) {
+    throw new Error("钱包地址格式不正确，需要 0x + 40 位十六进制字符串");
+  }
+  return value as `0x${string}`;
+}
+
 export function getWalletAddress(privateKey: string): string {
   return privateKeyToAccount(normalizePrivateKey(privateKey)).address;
 }
 
-export function createClobWalletClient(privateKey: string, chainId: number) {
+export function createClobWalletClient(
+  privateKey: string,
+  chainId: number,
+  authAddress?: string,
+) {
   const account = privateKeyToAccount(normalizePrivateKey(privateKey));
-  return createWalletClient({
+  const wallet = createWalletClient({
     account,
     chain: getViemChain(chainId),
     transport: http(),
   });
+
+  if (!authAddress || authAddress.toLowerCase() === account.address.toLowerCase()) {
+    return wallet;
+  }
+
+  const normalizedAuthAddress = normalizeAddress(authAddress);
+
+  return {
+    ...wallet,
+    account: {
+      ...account,
+      address: normalizedAuthAddress,
+    },
+    signTypedData: (parameters: Parameters<typeof wallet.signTypedData>[0]) =>
+      wallet.signTypedData({
+        ...parameters,
+        account,
+      }),
+  } as typeof wallet;
 }

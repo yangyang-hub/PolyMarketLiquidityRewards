@@ -3,6 +3,7 @@ import next from "next";
 import { WebSocketServer } from "ws";
 import { APP_TIME_ZONE } from "../lib/time";
 import { engineManager } from "../lib/engine/manager";
+import { configureNodeOutboundProxy } from "../lib/net/proxy";
 
 process.env.TZ ||= APP_TIME_ZONE;
 
@@ -21,6 +22,8 @@ export interface StartedServer {
 }
 
 export async function startServer(options: StartServerOptions = {}): Promise<StartedServer> {
+  configureNodeOutboundProxy();
+
   const dev = options.dev ?? process.env.NODE_ENV !== "production";
   const host = options.host ?? process.env.HOST ?? "127.0.0.1";
   const port = options.port ?? parseInt(process.env.PORT || "3000", 10);

@@ -1,4 +1,5 @@
 import { getGammaHost } from "../config";
+import { getJson } from "../net/http";
 import type { MarketInfo, MarketToken } from "../types";
 
 /**
@@ -57,9 +58,7 @@ function mapToMarketInfo(m: GammaMarketResp): MarketInfo {
 export async function fetchMarketByConditionId(conditionId: string): Promise<MarketInfo | null> {
   const host = getGammaHost();
   const url = `${host}/markets?condition_id=${conditionId}`;
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`市场信息接口异常：${resp.status}`);
-  const data: GammaMarketResp[] = await resp.json();
+  const data = await getJson<GammaMarketResp[]>(url);
   if (data.length === 0) return null;
   return mapToMarketInfo(data[0]);
 }
@@ -67,9 +66,7 @@ export async function fetchMarketByConditionId(conditionId: string): Promise<Mar
 export async function fetchMarketBySlug(slug: string): Promise<MarketInfo | null> {
   const host = getGammaHost();
   const url = `${host}/markets?slug=${slug}`;
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`市场信息接口异常：${resp.status}`);
-  const data: GammaMarketResp[] = await resp.json();
+  const data = await getJson<GammaMarketResp[]>(url);
   if (data.length === 0) return null;
   return mapToMarketInfo(data[0]);
 }
@@ -93,12 +90,7 @@ export async function fetchMarketsByTokenIds(tokenIds: string[]): Promise<Map<st
     const url = `${host}/markets?clob_token_ids=${encodeURIComponent(param)}`;
 
     try {
-      const resp = await fetch(url);
-      if (!resp.ok) {
-        console.error(`[GammaAPI] Batch fetch error: ${resp.status}`);
-        continue;
-      }
-      const data: GammaMarketResp[] = await resp.json();
+      const data = await getJson<GammaMarketResp[]>(url);
       for (const raw of data) {
         const info = mapToMarketInfo(raw);
         // Map each token ID to the market info

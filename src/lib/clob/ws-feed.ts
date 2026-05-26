@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import Decimal from "decimal.js";
 import type { OrderBook, PriceLevel } from "../types";
 import { getClobWsHost } from "../config";
+import { getNodeOutboundProxyAgent } from "../net/proxy";
 
 type OrderBookCallback = (tokenId: string, book: OrderBook) => void;
 type TradeCallback = (trade: TradeUpdate) => void;
@@ -143,7 +144,8 @@ export class ClobWsFeed {
     this.localBooks.clear();
 
     try {
-      this.ws = new WebSocket(url);
+      const agent = getNodeOutboundProxyAgent();
+      this.ws = new WebSocket(url, agent ? { agent } : undefined);
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : String(e);
       console.error(`[WsFeed] Connection error:`, message);

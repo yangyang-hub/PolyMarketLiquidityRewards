@@ -148,6 +148,7 @@ npm run start
 - `proxyWallet`
   - 当使用 Proxy / Safe / Deposit Wallet 模式时，填写 Polymarket Profile / Funder 地址
   - V2 新 API 用户通常应选择 `3`，这里填写 Polymarket 设置页显示的 Deposit Wallet 地址；私钥仍填写该 Deposit Wallet owner/signer 的私钥
+  - Deposit Wallet 模式下，CLOB API Key 和 L2 请求会绑定到该 Deposit Wallet 地址，签名仍由上方私钥完成；若新钱包首次下单失败，先在 Polymarket 网页端完成一笔小额手动挂单/成交以部署 deposit wallet
 
 ## 撤单策略说明
 
@@ -297,7 +298,7 @@ https://clob.polymarket.com
 curl -I --connect-timeout 10 https://clob.polymarket.com
 ```
 
-正常连通时可能返回 `405`，这表示服务可达；如果仍然超时，请检查 VPN、代理、DNS，或确认没有把 `CLOB_HOST` 改成不可达地址。桌面版会尝试继承系统 HTTP/HTTPS 代理；开发模式下也可以在启动前手动设置 `HTTPS_PROXY` / `HTTP_PROXY`。
+正常连通时可能返回 `405`，这表示服务可达；如果仍然超时，请检查 VPN、代理、DNS，或确认没有把 `CLOB_HOST` 改成不可达地址。桌面版会尝试继承系统 HTTP/HTTPS/SOCKS 代理；开发模式下也可以在启动前手动设置 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`。
 
 ### 3. “禁用”是什么意思？
 

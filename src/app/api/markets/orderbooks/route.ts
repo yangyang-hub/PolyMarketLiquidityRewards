@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { store } from "@/lib/store/memory-store";
 import { getClobHost } from "@/lib/config";
+import { getJson } from "@/lib/net/http";
 
 interface OrderBookLevelDto {
   price: number;
@@ -36,9 +37,7 @@ export async function GET() {
   for (const market of store.discoveredMarkets.values()) {
     for (const token of market.tokens) {
       try {
-        const resp = await fetch(`${host}/book?token_id=${token.token_id}`);
-        if (!resp.ok) continue;
-        const raw = await resp.json() as RawOrderBook;
+        const raw = await getJson<RawOrderBook>(`${host}/book?token_id=${token.token_id}`);
         if (!raw?.bids || !raw?.asks) continue;
 
         orderbooks[token.token_id] = {

@@ -139,6 +139,22 @@ function hasProxyEnv(env: NodeJS.ProcessEnv): boolean {
   return PROXY_ENV_KEYS.some((key) => Boolean(env[key]));
 }
 
+function proxyEnvForHttpProxy(proxy: string): Record<string, string> {
+  return {
+    HTTPS_PROXY: proxy,
+    HTTP_PROXY: proxy,
+    https_proxy: proxy,
+    http_proxy: proxy,
+  };
+}
+
+function proxyEnvForAllProxy(proxy: string): Record<string, string> {
+  return {
+    ALL_PROXY: proxy,
+    all_proxy: proxy,
+  };
+}
+
 function parseElectronProxyRules(rules: string): Record<string, string> {
   for (const rule of rules.split(";")) {
     const normalized = rule.trim().replace(/\s+/g, " ");
@@ -151,14 +167,12 @@ function parseElectronProxyRules(rules: string): Record<string, string> {
     if (kind === "PROXY" || kind === "HTTP" || kind === "HTTPS") {
       const protocol = kind === "HTTPS" ? "https" : "http";
       const proxy = `${protocol}://${target}`;
-      return {
-        HTTPS_PROXY: proxy,
-        HTTP_PROXY: proxy,
-      };
+      return proxyEnvForHttpProxy(proxy);
     }
 
     if (kind.startsWith("SOCKS")) {
-      console.warn(`检测到系统 SOCKS 代理但内置后端仅自动继承 HTTP/HTTPS 代理：${normalized}`);
+      const protocol = kind === "SOCKS4" ? "socks4" : "socks5";
+      return proxyEnvForAllProxy(`${protocol}://${target}`);
     }
   }
 

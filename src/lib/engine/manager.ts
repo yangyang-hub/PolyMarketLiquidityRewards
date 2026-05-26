@@ -126,15 +126,13 @@ class EngineManager {
       // Create engine
       this.createEngine(acc);
 
-      // Fetch balance in background and refresh allowance cache
+      // Fetch balance in background. The balance read refreshes CLOB's cache first.
       const executor = new ClobExecutor(acc);
       executor.initApiKeys().then(async () => {
         const balance = await executor.getCollateralBalance();
         console.log(`[Manager] ${acc.name} balance: $${balance}`);
         store.updateAccount(acc.name, { balance });
         this.broadcast({ type: "account_state", name: acc.name, state: store.accounts.get(acc.name)! });
-        // Trigger CLOB server to refresh its cached allowance
-        await executor.refreshAllowanceCache();
       }).catch((e: unknown) => {
         console.error(`[Manager] Failed to fetch balance for ${acc.name}:`, this.errorMessage(e));
       });

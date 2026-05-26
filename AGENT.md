@@ -65,6 +65,7 @@ Supported environment variables:
 - `CLOB_WS_HOST`: CLOB WebSocket host, default `wss://ws-subscriptions-clob.polymarket.com`.
 - `GAMMA_HOST`: Gamma API host, default `https://gamma-api.polymarket.com`.
 - `APP_DATA_DIR`: runtime data directory, default `data` under the current working directory.
+- `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` and lowercase variants: optional outbound proxy settings used by the Node backend for CLOB REST, Gamma API, and CLOB WebSocket connections. Packaged Electron attempts to translate Windows system HTTP/HTTPS/SOCKS proxy settings into these variables before starting the backend.
 
 Runtime-generated local data:
 
@@ -109,7 +110,7 @@ The `data/` directory is gitignored. Keep `data/app.db` and `data/.encryption-ke
 - Private keys are encrypted before database storage and never sent to the browser after creation/update.
 - EOA accounts (`signatureType = 0`) must not retain or submit a `proxyWallet`; Proxy/Safe/POLY_1271 accounts require a valid `0x` funder/deposit wallet address.
 - Enabled accounts are persisted through the `enabled` column and auto-started on server restart.
-- Running account engines poll CLOB open orders every 15 seconds, refresh collateral balance, check scoring status, and report active token ids.
+- Running account engines poll CLOB open orders every 15 seconds, refresh the CLOB collateral balance/allowance cache before reading balance, check scoring status, and report active token ids.
 - `engineManager.syncSubscriptions()` aggregates active token ids across running engines, subscribes/unsubscribes the shared CLOB WebSocket feed, fetches unknown market metadata from Gamma, and updates browser clients. Account stop/remove, manual cancel, and cancel-all paths must also resync subscriptions so stale order books and discovered markets are removed promptly.
 
 ## Risk And Cancellation Flow
@@ -170,6 +171,7 @@ Before handing off code changes, run the most relevant commands:
 - For desktop packaging changes, run the relevant `desktop:*` script.
 - On Windows, run packaging from a local drive path, not a UNC path such as `\\tsclient\...`; `cmd.exe` falls back to `C:\Windows` for UNC working directories.
 - Windows packaging requires Node.js 26.x and platform-specific optional native packages such as `lightningcss-win32-x64-msvc`; after switching Node versions, reinstall dependencies with `npm install --include=optional`.
+- Packaged Electron should inherit Windows system HTTP/HTTPS/SOCKS proxy settings for the bundled Node backend. For development or manual overrides, set `HTTPS_PROXY`, `HTTP_PROXY`, or `ALL_PROXY` before starting the app.
 - `scripts/prepare-electron-icons.mjs` generates `.cache/electron/logo.ico` from `public/logo.png` before Electron Builder runs; `electron/installer.nsh` reapplies that icon to desktop and Start Menu shortcuts.
 - `scripts/prepare-electron-resources.mjs` prunes traced `data`, `release`, `dist*`, and `.cache` directories from `.next/standalone`/`dist-server`; it renames standalone `node_modules` to `server-vendor` because Electron Builder filters `node_modules` inside `extraResources`.
 - Windows packaging extracts the downloaded `better-sqlite3` tarball through Node.js code in `scripts/script-utils.mjs`, not the system `tar` command.
@@ -201,3 +203,6 @@ If verification cannot be run because of missing network, credentials, platform 
 - 2026-05-21: Migrated the project baseline from Node 20 to Node 26 only, including package engines, Docker image, esbuild targets, Windows bundled `node.exe`, and `better-sqlite3` Node ABI.
 - 2026-05-21: Created this `AGENT.md` from the current README, package scripts, and source structure. No business code was changed in this update.
 - 2026-05-25: Fixed account signature/funder normalization, restored depth-cancel cooldown behavior, added explicit WebSocket cache-removal messages, resynced subscriptions after stop/remove/manual cancellation paths, and added `.dockerignore` protection for local runtime/build data.
+- 2026-05-26: Added Node backend outbound proxy support for CLOB REST, Gamma API, and CLOB WebSocket connections, including Electron inheritance of Windows system SOCKS proxies through `ALL_PROXY`. Pinned the Next.js workspace root so standalone packaging is not confused by parent lockfiles.
+- 2026-05-26: Fixed account balance refresh so CLOB balance/allowance cache is synced before reading collateral balances, preventing newly connected wallets from continuing to show stale zero balances.
+- 2026-05-26: Fixed POLY_1271 Deposit Wallet CLOB authentication so API keys and L2 headers bind to the deposit/funder address while order signatures are still produced by the configured owner private key.
