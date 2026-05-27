@@ -160,6 +160,7 @@ The browser WebSocket endpoint is `/ws`. Client messages currently only use `"PI
 - When changing strategy config, update `StrategyConfig`, defaults in `src/lib/config.ts`, database load/save behavior if needed, API validation in `src/app/api/config/route.ts`, client DTOs, UI settings, and this file.
 - When adding a WebSocket message type, update both server-side and client-side `WsMessage` types plus `src/stores/appStore.ts`.
 - When adding persistent fields, include SQLite migration logic in `src/lib/db/database.ts`.
+- For every code or packaging change, increment the package version in both `package.json` and `package-lock.json`; use the next patch version by default unless the user asks for a different major/minor version.
 - Respect the existing dirty worktree. Do not revert unrelated user changes.
 
 ## Verification Checklist
@@ -206,5 +207,6 @@ If verification cannot be run because of missing network, credentials, platform 
 - 2026-05-26: Added Node backend outbound proxy support for CLOB REST, Gamma API, and CLOB WebSocket connections, including Electron inheritance of Windows system SOCKS proxies through `ALL_PROXY`. Pinned the Next.js workspace root so standalone packaging is not confused by parent lockfiles.
 - 2026-05-27: Strengthened packaged proxy handling by installing the proxy agent as Node's global HTTP/HTTPS agent, resolving system proxy rules for CLOB REST, Gamma, and CLOB WebSocket targets, and logging resolved proxy decisions for desktop troubleshooting.
 - 2026-05-27: Fixed a CLOB WebSocket proxy gap by mapping inherited HTTP/HTTPS proxies to `WSS_PROXY`/`ALL_PROXY`, since `wss://` URLs do not use `HTTPS_PROXY` in `proxy-from-env`.
+- 2026-05-27: Set the packaged app version to `1.0.0` and documented the requirement to increment the package version on every future code or packaging change.
 - 2026-05-26: Fixed account balance refresh so CLOB balance/allowance cache is synced before reading collateral balances, preventing newly connected wallets from continuing to show stale zero balances.
 - 2026-05-26: Fixed POLY_1271 Deposit Wallet CLOB authentication so API keys and L2 headers bind to the deposit/funder address while order signatures are still produced by the configured owner private key.
