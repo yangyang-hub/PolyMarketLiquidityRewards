@@ -20,9 +20,11 @@ const PROXY_ENV_KEYS = [
   "HTTPS_PROXY",
   "HTTP_PROXY",
   "ALL_PROXY",
+  "WSS_PROXY",
   "https_proxy",
   "http_proxy",
   "all_proxy",
+  "wss_proxy",
 ];
 
 function getIconPath(): string | undefined {
@@ -143,8 +145,12 @@ function proxyEnvForHttpProxy(proxy: string): Record<string, string> {
   return {
     HTTPS_PROXY: proxy,
     HTTP_PROXY: proxy,
+    ALL_PROXY: proxy,
+    WSS_PROXY: proxy,
     https_proxy: proxy,
     http_proxy: proxy,
+    all_proxy: proxy,
+    wss_proxy: proxy,
   };
 }
 
@@ -153,6 +159,18 @@ function proxyEnvForAllProxy(proxy: string): Record<string, string> {
     ALL_PROXY: proxy,
     all_proxy: proxy,
   };
+}
+
+function hasProxyScheme(target: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(target);
+}
+
+function proxyUrl(kind: string, target: string): string {
+  if (hasProxyScheme(target)) return target;
+  if (kind === "HTTPS") return `https://${target}`;
+  if (kind === "SOCKS4") return `socks4://${target}`;
+  if (kind.startsWith("SOCKS")) return `socks5://${target}`;
+  return `http://${target}`;
 }
 
 function parseElectronProxyRules(rules: string): Record<string, string> {
@@ -165,14 +183,11 @@ function parseElectronProxyRules(rules: string): Record<string, string> {
     if (!target) continue;
 
     if (kind === "PROXY" || kind === "HTTP" || kind === "HTTPS") {
-      const protocol = kind === "HTTPS" ? "https" : "http";
-      const proxy = `${protocol}://${target}`;
-      return proxyEnvForHttpProxy(proxy);
+      return proxyEnvForHttpProxy(proxyUrl(kind, target));
     }
 
     if (kind.startsWith("SOCKS")) {
-      const protocol = kind === "SOCKS4" ? "socks4" : "socks5";
-      return proxyEnvForAllProxy(`${protocol}://${target}`);
+      return proxyEnvForAllProxy(proxyUrl(kind, target));
     }
   }
 
@@ -180,22 +195,34 @@ function parseElectronProxyRules(rules: string): Record<string, string> {
 }
 
 async function resolveSystemProxyEnv(): Promise<Record<string, string>> {
-  if (hasProxyEnv(process.env)) return {};
-
-  const targetUrl = process.env.CLOB_HOST || "https://clob.polymarket.com";
-
-  try {
-    const rules = await session.defaultSession.resolveProxy(targetUrl);
-    const proxyEnv = parseElectronProxyRules(rules);
-    if (Object.keys(proxyEnv).length > 0) {
-      console.log(`内置后端继承系统代理：${rules}`);
-    }
-    return proxyEnv;
-  } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : String(e);
-    console.warn(`读取系统代理失败：${message}`);
+  if (hasProxyEnv(process.env)) {
+    console.log("检测到已设置代理环境变量，内置后端将直接继承当前进程环境变量");
     return {};
   }
+
+  const targetUrls = [
+    process.env.CLOB_HOST || "https://clob.polymarket.com",
+    process.env.GAMMA_HOST || "https://gamma-api.polymarket.com",
+    `${process.env.CLOB_WS_HOST || "wss://ws-subscriptions-clob.polymarket.com"}/ws/market`,
+  ];
+
+  for (const targetUrl of targetUrls) {
+    try {
+      const rules = await session.defaultSession.resolveProxy(targetUrl);
+      console.log(`系统代理解析 ${targetUrl} -> ${rules || "空"}`);
+      const proxyEnv = parseElectronProxyRules(rules);
+      if (Object.keys(proxyEnv).length > 0) {
+        console.log(`内置后端继承系统代理：${rules}`);
+        return proxyEnv;
+      }
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.warn(`读取系统代理失败：${targetUrl}：${message}`);
+    }
+  }
+
+  console.warn("系统代理解析结果均为 DIRECT，内置后端不会自动设置代理环境变量");
+  return {};
 }
 
 function backendFailureDetail(message: string): string {

@@ -298,7 +298,7 @@ https://clob.polymarket.com
 curl -I --connect-timeout 10 https://clob.polymarket.com
 ```
 
-正常连通时可能返回 `405`，这表示服务可达；如果仍然超时，请检查 VPN、代理、DNS，或确认没有把 `CLOB_HOST` 改成不可达地址。桌面版会尝试继承系统 HTTP/HTTPS/SOCKS 代理；开发模式下也可以在启动前手动设置 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`。
+正常连通时可能返回 `405`，这表示服务可达；如果仍然超时，请检查 VPN、代理、DNS，或确认没有把 `CLOB_HOST` 改成不可达地址。桌面版会尝试继承系统 HTTP/HTTPS/SOCKS 代理；开发模式下也可以在启动前手动设置 `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`。行情 `wss://` 订阅会自动从这些代理变量补齐 `WSS_PROXY`。桌面版启动后可从托盘打开日志目录，查看 `electron-main.log` 里的“系统代理解析”和 `backend.log` 里的 `[Proxy]` 记录来确认是否已启用代理。
 
 ### 3. “禁用”是什么意思？
 
